@@ -12,7 +12,7 @@ Feature families from the proposal's reference inventory, with the phase in whic
 | Key revocation with invalidation | P1 | Valkey pub/sub + snapshot refresh |
 | Key rotation with grace period | P1 (API) / P3 (scheduled) | |
 | Admin key auth | P1 | |
-| Keycloak OIDC JWT on control API | P2 | JWKS validation, roles claim → scopes |
+| Keycloak OIDC JWT on control API | P2 ✓ | JWKS validation, roles claim → scopes (docs/spec/01 §3.1, `tests/test_admin_oidc.py`) |
 | Delegated roles (org owner, team owner, project member, service account) | P2 | |
 | SCIM 2.0 provisioning service | P3 | separate deliverable |
 | CIDR restrictions, private admin ingress, required metadata | P2 | |

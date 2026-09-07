@@ -38,7 +38,12 @@ docker compose exec admin aigw bootstrap   # creates org/team/project/model/depl
 | `AIGW_DATABASE_URL` | postgresql+asyncpg://… | durable authority |
 | `AIGW_VALKEY_URL` | redis://valkey:6379/0 | counters, cooldowns, invalidation |
 | `AIGW_ADMIN_KEY` | — | alpha control-API credential |
-| `AIGW_OIDC_ISSUER`, `AIGW_OIDC_AUDIENCE` | — | Keycloak JWT validation for control API (optional) |
+| `AIGW_OIDC_ISSUER`, `AIGW_OIDC_AUDIENCE` | — | Keycloak realm URL and expected `aud`; enables bearer JWTs on the control API (docs/spec/01 §3.1) |
+| `AIGW_OIDC_CLIENT_ID` | audience | Keycloak client whose `resource_access` roles are honoured |
+| `AIGW_OIDC_JWKS_URL` | `{issuer}/protocol/openid-connect/certs` | JWKS override |
+| `AIGW_OIDC_ROLE_SCOPES` | admin/operator/viewer | JSON role → scope patterns |
+| `AIGW_OIDC_LEEWAY_SECONDS` | 30 | clock-skew tolerance on `exp`/`iat` |
+| `AIGW_OIDC_JWKS_CACHE_SECONDS`, `AIGW_OIDC_JWKS_MIN_REFRESH_SECONDS` | 3600, 30 | signing-key cache TTL; refetch cooldown on unknown `kid` |
 | `AIGW_CONFIG_REFRESH_SECONDS` | 5 | snapshot poll |
 | `AIGW_CONFIG_MAX_STALENESS_SECONDS` | 300 | fail-closed bound |
 | `AIGW_RATELIMIT_FAIL_MODE` | open | open / closed when Valkey unavailable |

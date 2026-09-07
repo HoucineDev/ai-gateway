@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from aigw.adapters.registry import AdapterRegistry
+from aigw.admin.auth import OIDCVerifier
 from aigw.config import Settings, get_settings
 from aigw.core.errors import GatewayError
 from aigw.core.secrets import SecretResolver
@@ -31,6 +32,7 @@ def create_app(
     upstream_client: httpx.AsyncClient | None = None,
     valkey: redis.Redis | None = None,
     secrets: SecretResolver | None = None,
+    oidc_http_client: httpx.AsyncClient | None = None,
 ) -> FastAPI:
     settings = settings or get_settings()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -55,6 +57,7 @@ def create_app(
         app.state.limiter = RateLimiter(app.state.valkey, settings.ratelimit_fail_mode)
         app.state.cooldowns = CooldownStore(app.state.valkey)
         app.state.secrets = secrets or SecretResolver()
+        app.state.oidc = OIDCVerifier(settings, oidc_http_client) if settings.oidc_issuer else None
         from aigw.gateway.pipeline import Pipeline
 
         app.state.pipeline = Pipeline(
@@ -78,6 +81,8 @@ def create_app(
                 await app.state.snapshots.stop()
             if upstream_client is None:
                 await app.state.upstream.aclose()
+            if app.state.oidc is not None:
+                await app.state.oidc.aclose()
             if db is None:
                 await app.state.db.dispose()
 
@@ -137,10 +142,14 @@ def _mount_portal(app: FastAPI, portal_dir: str | None) -> None:
     """Serve the built React portal (SPA fallback to index.html) from the admin role."""
     import os
 
-    candidates = [portal_dir] if portal_dir else [
-        os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "portal", "dist"),
-        "/app/portal",
-    ]
+    candidates = (
+        [portal_dir]
+        if portal_dir
+        else [
+            os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "portal", "dist"),
+            "/app/portal",
+        ]
+    )
     for d in candidates:
         if d and os.path.isfile(os.path.join(d, "index.html")):
             from fastapi.staticfiles import StaticFiles
@@ -150,7 +159,7 @@ def _mount_portal(app: FastAPI, portal_dir: str | None) -> None:
             index = os.path.join(d, "index.html")
 
             @app.get("/{path:path}", include_in_schema=False)
-            async def portal(path: str):  # noqa: ARG001
+            async def portal(path: str, index: str = index):  # noqa: ARG001
                 return FileResponse(index)
 
             log.info("portal mounted from %s", d)

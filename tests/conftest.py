@@ -73,8 +73,14 @@ def settings():
     )
 
 
+@pytest.fixture
+def oidc_http_client():
+    """HTTP client the OIDC verifier fetches JWKS with; test modules override it with a fake Keycloak ASGI app."""
+    return None
+
+
 @pytest_asyncio.fixture
-async def app(db, valkey, settings):
+async def app(db, valkey, settings, oidc_http_client):
     upstream = httpx.AsyncClient(transport=httpx.ASGITransport(app=mock), base_url="http://mock")
     STATE["calls"] = 0
     application = create_app(
@@ -83,6 +89,7 @@ async def app(db, valkey, settings):
         upstream_client=upstream,
         valkey=valkey,
         secrets=SecretResolver({"ANTHROPIC_KEY": "test-anthropic-key", "OPENAI_KEY": "sk-test"}),
+        oidc_http_client=oidc_http_client,
     )
     async with application.router.lifespan_context(application):
         yield application

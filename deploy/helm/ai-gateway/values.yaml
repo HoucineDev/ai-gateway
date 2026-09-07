@@ -12,6 +12,7 @@ config:
   AIGW_MAX_ATTEMPTS: "3"
 
 # Secret with AIGW_DATABASE_URL, AIGW_ADMIN_KEY and provider credentials referenced by `env:` credential refs.
+# Control-API bearer auth: set AIGW_OIDC_ISSUER / AIGW_OIDC_AUDIENCE (and optionally AIGW_OIDC_ROLE_SCOPES) in `env` below.
 existingSecret: ai-gateway-secrets
 
 gateway:

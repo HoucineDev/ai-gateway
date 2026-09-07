@@ -16,9 +16,21 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://aigw:aigw@localhost:5432/aigw"
     valkey_url: str = "redis://localhost:6379/0"
     admin_key: str | None = None
-    oidc_issuer: str | None = None
-    oidc_audience: str | None = None
-    oidc_admin_role: str = "aigw-admin"
+    # Keycloak OIDC bearer tokens on the control API (docs/spec/01 §3.1, docs/spec/05 §4)
+    oidc_issuer: str | None = None  # e.g. https://keycloak.example/realms/aigw
+    oidc_audience: str | None = None  # expected `aud`; unset = audience not verified
+    oidc_client_id: str | None = None  # Keycloak client whose `resource_access` roles count (default: audience)
+    oidc_jwks_url: str | None = None  # default: {issuer}/protocol/openid-connect/certs
+    oidc_leeway_seconds: float = 30.0
+    oidc_jwks_cache_seconds: float = 3600.0
+    oidc_jwks_min_refresh_seconds: float = 30.0  # bound on refetches triggered by unknown `kid`
+    oidc_role_scopes: dict[str, list[str]] = Field(
+        default_factory=lambda: {
+            "aigw-admin": ["*"],
+            "aigw-operator": ["*:read", "models:write", "deployments:write", "prices:write", "budgets:write"],
+            "aigw-viewer": ["*:read"],
+        }
+    )
 
     config_refresh_seconds: float = 5.0
     config_max_staleness_seconds: float = 300.0

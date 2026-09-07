@@ -5,7 +5,7 @@
 | Surface | Path prefix | Auth | Role serving it |
 |---------|-------------|------|-----------------|
 | Inference API | `/v1/*` | Virtual key (`Authorization: Bearer aigw_…`) | `gateway` |
-| Control API | `/admin/v1/*` | Admin key (`X-Admin-Key`) in alpha; OIDC/Keycloak JWT from Phase 2 | `admin` |
+| Control API | `/admin/v1/*` | Admin key (`X-Admin-Key`) or Keycloak OIDC bearer JWT with roles mapped to scopes (§3.1) | `admin` |
 | Health | `/healthz`, `/readyz` | none | all |
 | Metrics | `/metrics` | none (private ingress) | all |
 
@@ -63,6 +63,36 @@ All write operations produce an append-only `audit_events` row with actor, actio
 | requests | `GET /requests/{request_id}` | attempts, routing decision, usage — the developer diagnostics view |
 | audit | `GET /audit?target_type&target_id&from&to` | |
 | config | `GET /config/version` | monotonically increasing version the gateway polls |
+| me | `GET /me` | caller identity: `actor_type`, `actor_id`, `roles`, effective `scopes` (any authenticated caller) |
+
+### 3.1 Authentication and scopes
+
+Two credentials are accepted. `X-Admin-Key` (`AIGW_ADMIN_KEY`) is the bootstrap credential and carries every scope.
+`Authorization: Bearer <JWT>` is accepted when `AIGW_OIDC_ISSUER` is set: the token is validated against the issuer's
+JWKS (`{issuer}/protocol/openid-connect/certs` unless `AIGW_OIDC_JWKS_URL` overrides it) — asymmetric algorithms only,
+`exp`/`iat`/`iss`/`sub` required, `aud` checked when `AIGW_OIDC_AUDIENCE` is set, Keycloak `typ` must be `Bearer`
+(ID and refresh tokens are refused). Signing keys are cached for `AIGW_OIDC_JWKS_CACHE_SECONDS`; an unknown `kid`
+triggers a refetch at most once per `AIGW_OIDC_JWKS_MIN_REFRESH_SECONDS` (key rotation without restart, no JWKS
+hammering from garbage tokens). If the JWKS cannot be fetched and nothing is cached, bearer callers get 503
+`oidc_unavailable`; cached keys keep working through an identity-provider outage.
+
+Roles are read from `realm_access.roles`, `resource_access.<AIGW_OIDC_CLIENT_ID or AIGW_OIDC_AUDIENCE>.roles` and a
+flat `roles` claim, then mapped to scopes through `AIGW_OIDC_ROLE_SCOPES` (JSON object, role → list of scope
+patterns). Scopes are `<resource>:<read|write>` over `organizations, teams, projects, keys, models, deployments,
+prices, budgets, usage, requests, audit, config`; `*`, `*:read`, `*:write` and `<resource>:*` are wildcards. Default
+mapping:
+
+| Keycloak role | Scopes |
+|---------------|--------|
+| `aigw-admin` | `*` |
+| `aigw-operator` | `*:read`, `models:write`, `deployments:write`, `prices:write`, `budgets:write` |
+| `aigw-viewer` | `*:read` |
+
+Every route declares the scope it needs (`require_scope`, enforced by a test). Outcomes: 401 `invalid_token`,
+`unknown_signing_key`, `invalid_admin_key`, `admin_auth_required`, `oidc_not_configured`; 403 `missing_role` (valid
+token, no mapped role) and `insufficient_scope`. Audit rows record `actor_type=user` and `actor_id` = `preferred_username`
+(falling back to `sub`). Delegated tenant-level roles (org owner, project member) are a separate Phase 2 item and will
+narrow these scopes by tenant; this section is global role-based access.
 
 Pagination: `?limit&cursor` (opaque). IDs are UUIDv7 strings. Timestamps are RFC 3339 UTC.
 

@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import case, func, select
 
 from aigw.admin import schemas as S
-from aigw.admin.auth import Actor, require_admin
+from aigw.admin.auth import Actor, require_admin, require_scope
 from aigw.admin.service import (
     audit,
     bump_config,
@@ -37,7 +37,21 @@ from aigw.db.models import (
 )
 from aigw.gateway.auth import generate_key
 
+# require_admin at router level is the fail-closed backstop; each route declares its scope with require_scope
+# (docs/spec/01 §3.1). tests/test_admin_oidc.py fails if a route is added without one.
 router = APIRouter(prefix="/admin/v1", dependencies=[Depends(require_admin)])
+
+
+@router.get("/me")
+async def me(actor: Actor = Depends(require_admin)):
+    """Who am I: actor identity, roles from the token and the effective control-API scopes (the portal uses it to
+    hide actions the caller cannot perform)."""
+    return {
+        "actor_type": actor.type,
+        "actor_id": actor.id,
+        "roles": sorted(actor.roles),
+        "scopes": actor.effective_scopes(),
+    }
 
 
 def _db(request: Request):
@@ -48,7 +62,7 @@ def _db(request: Request):
 
 
 @router.post("/organizations", status_code=201)
-async def create_org(body: S.OrgCreate, request: Request, actor: Actor = Depends(require_admin)):
+async def create_org(body: S.OrgCreate, request: Request, actor: Actor = Depends(require_scope("organizations:write"))):
     async with _db(request).tx() as s:
         if (await s.execute(select(Organization).where(Organization.slug == body.slug))).scalar_one_or_none():
             raise GatewayError(ErrorType.invalid_request, "slug already exists", code="conflict", param="slug")
@@ -59,21 +73,23 @@ async def create_org(body: S.OrgCreate, request: Request, actor: Actor = Depends
         return to_dict(org)
 
 
-@router.get("/organizations")
+@router.get("/organizations", dependencies=[Depends(require_scope("organizations:read"))])
 async def list_orgs(request: Request, limit: int = Query(50, le=200)):
     async with _db(request).session() as s:
         rows = (await s.execute(select(Organization).order_by(Organization.created_at.desc()).limit(limit))).scalars()
         return {"data": [to_dict(o) for o in rows]}
 
 
-@router.get("/organizations/{org_id}")
+@router.get("/organizations/{org_id}", dependencies=[Depends(require_scope("organizations:read"))])
 async def get_org(org_id: str, request: Request):
     async with _db(request).session() as s:
         return to_dict(await get_or_404(s, Organization, org_id, "organization"))
 
 
 @router.patch("/organizations/{org_id}")
-async def patch_org(org_id: str, body: S.OrgPatch, request: Request, actor: Actor = Depends(require_admin)):
+async def patch_org(
+    org_id: str, body: S.OrgPatch, request: Request, actor: Actor = Depends(require_scope("organizations:write"))
+):
     async with _db(request).tx() as s:
         org = await get_or_404(s, Organization, org_id, "organization")
         before = to_dict(org)
@@ -87,7 +103,9 @@ async def patch_org(org_id: str, body: S.OrgPatch, request: Request, actor: Acto
 
 
 @router.post("/organizations/{org_id}/teams", status_code=201)
-async def create_team(org_id: str, body: S.TeamCreate, request: Request, actor: Actor = Depends(require_admin)):
+async def create_team(
+    org_id: str, body: S.TeamCreate, request: Request, actor: Actor = Depends(require_scope("teams:write"))
+):
     async with _db(request).tx() as s:
         org = await get_or_404(s, Organization, org_id, "organization")
         team = Team(org_id=org.id, name=body.name, settings=body.settings)
@@ -97,21 +115,23 @@ async def create_team(org_id: str, body: S.TeamCreate, request: Request, actor: 
         return to_dict(team)
 
 
-@router.get("/organizations/{org_id}/teams")
+@router.get("/organizations/{org_id}/teams", dependencies=[Depends(require_scope("teams:read"))])
 async def list_teams(org_id: str, request: Request):
     async with _db(request).session() as s:
         rows = (await s.execute(select(Team).where(Team.org_id == parse_uuid(org_id)).order_by(Team.name))).scalars()
         return {"data": [to_dict(t) for t in rows]}
 
 
-@router.get("/teams/{team_id}")
+@router.get("/teams/{team_id}", dependencies=[Depends(require_scope("teams:read"))])
 async def get_team(team_id: str, request: Request):
     async with _db(request).session() as s:
         return to_dict(await get_or_404(s, Team, team_id, "team"))
 
 
 @router.patch("/teams/{team_id}")
-async def patch_team(team_id: str, body: S.NamePatch, request: Request, actor: Actor = Depends(require_admin)):
+async def patch_team(
+    team_id: str, body: S.NamePatch, request: Request, actor: Actor = Depends(require_scope("teams:write"))
+):
     async with _db(request).tx() as s:
         t = await get_or_404(s, Team, team_id, "team")
         before = to_dict(t)
@@ -122,7 +142,9 @@ async def patch_team(team_id: str, body: S.NamePatch, request: Request, actor: A
 
 
 @router.post("/teams/{team_id}/projects", status_code=201)
-async def create_project(team_id: str, body: S.ProjectCreate, request: Request, actor: Actor = Depends(require_admin)):
+async def create_project(
+    team_id: str, body: S.ProjectCreate, request: Request, actor: Actor = Depends(require_scope("projects:write"))
+):
     async with _db(request).tx() as s:
         team = await get_or_404(s, Team, team_id, "team")
         p = Project(org_id=team.org_id, team_id=team.id, name=body.name, settings=body.settings)
@@ -133,7 +155,7 @@ async def create_project(team_id: str, body: S.ProjectCreate, request: Request, 
         return to_dict(p)
 
 
-@router.get("/teams/{team_id}/projects")
+@router.get("/teams/{team_id}/projects", dependencies=[Depends(require_scope("projects:read"))])
 async def list_projects(team_id: str, request: Request):
     async with _db(request).session() as s:
         rows = (
@@ -142,14 +164,16 @@ async def list_projects(team_id: str, request: Request):
         return {"data": [to_dict(p) for p in rows]}
 
 
-@router.get("/projects/{project_id}")
+@router.get("/projects/{project_id}", dependencies=[Depends(require_scope("projects:read"))])
 async def get_project(project_id: str, request: Request):
     async with _db(request).session() as s:
         return to_dict(await get_or_404(s, Project, project_id, "project"))
 
 
 @router.patch("/projects/{project_id}")
-async def patch_project(project_id: str, body: S.NamePatch, request: Request, actor: Actor = Depends(require_admin)):
+async def patch_project(
+    project_id: str, body: S.NamePatch, request: Request, actor: Actor = Depends(require_scope("projects:write"))
+):
     async with _db(request).tx() as s:
         p = await get_or_404(s, Project, project_id, "project")
         before = to_dict(p)
@@ -164,7 +188,9 @@ async def patch_project(project_id: str, body: S.NamePatch, request: Request, ac
 
 
 @router.post("/projects/{project_id}/keys", status_code=201)
-async def create_key(project_id: str, body: S.KeyCreate, request: Request, actor: Actor = Depends(require_admin)):
+async def create_key(
+    project_id: str, body: S.KeyCreate, request: Request, actor: Actor = Depends(require_scope("keys:write"))
+):
     async with _db(request).tx() as s:
         p = await get_or_404(s, Project, project_id, "project")
         plaintext, key_hash, prefix = generate_key()
@@ -188,7 +214,7 @@ async def create_key(project_id: str, body: S.KeyCreate, request: Request, actor
         return {**to_dict(k), "key": plaintext}
 
 
-@router.get("/projects/{project_id}/keys")
+@router.get("/projects/{project_id}/keys", dependencies=[Depends(require_scope("keys:read"))])
 async def list_keys(project_id: str, request: Request):
     async with _db(request).session() as s:
         rows = (
@@ -201,14 +227,14 @@ async def list_keys(project_id: str, request: Request):
         return {"data": [to_dict(k) for k in rows]}
 
 
-@router.get("/keys/{key_id}")
+@router.get("/keys/{key_id}", dependencies=[Depends(require_scope("keys:read"))])
 async def get_key(key_id: str, request: Request):
     async with _db(request).session() as s:
         return to_dict(await get_or_404(s, VirtualKey, key_id, "key"))
 
 
 @router.post("/keys/{key_id}/revoke")
-async def revoke_key(key_id: str, request: Request, actor: Actor = Depends(require_admin)):
+async def revoke_key(key_id: str, request: Request, actor: Actor = Depends(require_scope("keys:write"))):
     async with _db(request).tx() as s:
         k = await get_or_404(s, VirtualKey, key_id, "key")
         before = to_dict(k)
@@ -222,7 +248,9 @@ async def revoke_key(key_id: str, request: Request, actor: Actor = Depends(requi
 
 
 @router.post("/keys/{key_id}/rotate", status_code=201)
-async def rotate_key(key_id: str, body: S.KeyRotate, request: Request, actor: Actor = Depends(require_admin)):
+async def rotate_key(
+    key_id: str, body: S.KeyRotate, request: Request, actor: Actor = Depends(require_scope("keys:write"))
+):
     async with _db(request).tx() as s:
         old = await get_or_404(s, VirtualKey, key_id, "key")
         if old.status != "active":
@@ -264,7 +292,7 @@ async def rotate_key(key_id: str, body: S.KeyRotate, request: Request, actor: Ac
 
 
 @router.post("/models", status_code=201)
-async def create_model(body: S.ModelCreate, request: Request, actor: Actor = Depends(require_admin)):
+async def create_model(body: S.ModelCreate, request: Request, actor: Actor = Depends(require_scope("models:write"))):
     async with _db(request).tx() as s:
         org_id = parse_uuid(body.org_id, "org_id") if body.org_id else None
         m = Model(
@@ -285,7 +313,7 @@ async def create_model(body: S.ModelCreate, request: Request, actor: Actor = Dep
         return to_dict(m)
 
 
-@router.get("/models")
+@router.get("/models", dependencies=[Depends(require_scope("models:read"))])
 async def list_models(request: Request, org_id: str | None = None):
     async with _db(request).session() as s:
         q = select(Model).order_by(Model.name)
@@ -300,7 +328,9 @@ async def list_models(request: Request, org_id: str | None = None):
 
 
 @router.patch("/models/{model_id}")
-async def patch_model(model_id: str, body: S.ModelPatch, request: Request, actor: Actor = Depends(require_admin)):
+async def patch_model(
+    model_id: str, body: S.ModelPatch, request: Request, actor: Actor = Depends(require_scope("models:write"))
+):
     async with _db(request).tx() as s:
         m = await get_or_404(s, Model, model_id, "model")
         before = to_dict(m)
@@ -313,7 +343,10 @@ async def patch_model(model_id: str, body: S.ModelPatch, request: Request, actor
 
 @router.post("/models/{model_id}/deployments", status_code=201)
 async def create_deployment(
-    model_id: str, body: S.DeploymentCreate, request: Request, actor: Actor = Depends(require_admin)
+    model_id: str,
+    body: S.DeploymentCreate,
+    request: Request,
+    actor: Actor = Depends(require_scope("deployments:write")),
 ):
     async with _db(request).tx() as s:
         m = await get_or_404(s, Model, model_id, "model")
@@ -327,7 +360,10 @@ async def create_deployment(
 
 @router.patch("/deployments/{deployment_id}")
 async def patch_deployment(
-    deployment_id: str, body: S.DeploymentPatch, request: Request, actor: Actor = Depends(require_admin)
+    deployment_id: str,
+    body: S.DeploymentPatch,
+    request: Request,
+    actor: Actor = Depends(require_scope("deployments:write")),
 ):
     async with _db(request).tx() as s:
         d = await get_or_404(s, Deployment, deployment_id, "deployment")
@@ -341,7 +377,10 @@ async def patch_deployment(
 
 @router.post("/deployments/{deployment_id}/cooldown")
 async def cooldown_deployment(
-    deployment_id: str, body: S.CooldownRequest, request: Request, actor: Actor = Depends(require_admin)
+    deployment_id: str,
+    body: S.CooldownRequest,
+    request: Request,
+    actor: Actor = Depends(require_scope("deployments:write")),
 ):
     async with _db(request).tx() as s:
         d = await get_or_404(s, Deployment, deployment_id, "deployment")
@@ -353,7 +392,7 @@ async def cooldown_deployment(
 
 
 @router.post("/prices", status_code=201)
-async def create_price(body: S.PriceCreate, request: Request, actor: Actor = Depends(require_admin)):
+async def create_price(body: S.PriceCreate, request: Request, actor: Actor = Depends(require_scope("prices:write"))):
     async with _db(request).tx() as s:
         latest = (
             await s.execute(
@@ -381,7 +420,7 @@ async def create_price(body: S.PriceCreate, request: Request, actor: Actor = Dep
         return to_dict(p)
 
 
-@router.get("/prices")
+@router.get("/prices", dependencies=[Depends(require_scope("prices:read"))])
 async def list_prices(request: Request, provider: str | None = None):
     async with _db(request).session() as s:
         q = select(Price).order_by(Price.provider, Price.provider_model, Price.version.desc())
@@ -396,7 +435,7 @@ _SCOPE_MODEL = {"organization": Organization, "team": Team, "project": Project, 
 
 
 @router.post("/budgets", status_code=201)
-async def create_budget(body: S.BudgetCreate, request: Request, actor: Actor = Depends(require_admin)):
+async def create_budget(body: S.BudgetCreate, request: Request, actor: Actor = Depends(require_scope("budgets:write"))):
     async with _db(request).tx() as s:
         target = await get_or_404(s, _SCOPE_MODEL[body.scope_type], body.scope_id, body.scope_type)
         org_id = target.id if body.scope_type == "organization" else target.org_id
@@ -426,7 +465,7 @@ async def create_budget(body: S.BudgetCreate, request: Request, actor: Actor = D
         return to_dict(b)
 
 
-@router.get("/budgets")
+@router.get("/budgets", dependencies=[Depends(require_scope("budgets:read"))])
 async def list_budgets(
     request: Request, scope_type: str | None = None, scope_id: str | None = None, org_id: str | None = None
 ):
@@ -451,7 +490,9 @@ def _budget_view(b: Budget) -> dict:
 
 
 @router.patch("/budgets/{budget_id}")
-async def patch_budget(budget_id: str, body: S.BudgetPatch, request: Request, actor: Actor = Depends(require_admin)):
+async def patch_budget(
+    budget_id: str, body: S.BudgetPatch, request: Request, actor: Actor = Depends(require_scope("budgets:write"))
+):
     async with _db(request).tx() as s:
         b = await get_or_404(s, Budget, budget_id, "budget")
         before = to_dict(b)
@@ -463,7 +504,7 @@ async def patch_budget(budget_id: str, body: S.BudgetPatch, request: Request, ac
 
 @router.post("/budgets/{budget_id}/temporary-increase")
 async def temporary_increase(
-    budget_id: str, body: S.TemporaryIncrease, request: Request, actor: Actor = Depends(require_admin)
+    budget_id: str, body: S.TemporaryIncrease, request: Request, actor: Actor = Depends(require_scope("budgets:write"))
 ):
     async with _db(request).tx() as s:
         b = await get_or_404(s, Budget, budget_id, "budget")
@@ -476,7 +517,7 @@ async def temporary_increase(
 # ---- usage / requests / audit / config ----------------------------------
 
 
-@router.get("/usage")
+@router.get("/usage", dependencies=[Depends(require_scope("usage:read"))])
 async def usage(
     request: Request,
     scope_type: str = Query(pattern="^(organization|team|project|key)$"),
@@ -529,7 +570,7 @@ async def usage(
         }
 
 
-@router.get("/requests/{request_id}")
+@router.get("/requests/{request_id}", dependencies=[Depends(require_scope("requests:read"))])
 async def get_request(request_id: str, request: Request):
     async with _db(request).session() as s:
         rid = parse_uuid(request_id, "request_id")
@@ -550,7 +591,7 @@ async def get_request(request_id: str, request: Request):
         }
 
 
-@router.get("/requests")
+@router.get("/requests", dependencies=[Depends(require_scope("requests:read"))])
 async def list_requests(
     request: Request,
     project_id: str | None = None,
@@ -569,7 +610,7 @@ async def list_requests(
         return {"data": [to_dict(e) for e in (await s.execute(q)).scalars()]}
 
 
-@router.get("/audit")
+@router.get("/audit", dependencies=[Depends(require_scope("audit:read"))])
 async def list_audit(
     request: Request,
     target_type: str | None = None,
@@ -588,13 +629,13 @@ async def list_audit(
         return {"data": [to_dict(a) for a in (await s.execute(q)).scalars()]}
 
 
-@router.get("/config/version")
+@router.get("/config/version", dependencies=[Depends(require_scope("config:read"))])
 async def config_version(request: Request):
     async with _db(request).session() as s:
         return {"version": await current_config_version(s)}
 
 
-@router.get("/overview")
+@router.get("/overview", dependencies=[Depends(require_scope("usage:read"))])
 async def overview(request: Request, org_id: str | None = None, hours: int = Query(24, ge=1, le=24 * 90)):
     """Traffic, latency, failures and spend for the portal overview."""
     since = datetime.now(UTC) - timedelta(hours=hours)
