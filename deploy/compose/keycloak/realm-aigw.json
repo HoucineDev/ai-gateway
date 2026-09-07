@@ -1,0 +1,82 @@
+{
+  "realm": "aigw",
+  "enabled": true,
+  "displayName": "Independent AI Gateway (dev)",
+  "accessTokenLifespan": 900,
+  "roles": {
+    "realm": [
+      { "name": "aigw-admin", "description": "Every control-API scope" },
+      { "name": "aigw-operator", "description": "Read everything; manage models, deployments, prices, budgets" },
+      { "name": "aigw-viewer", "description": "Read-only control API" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "aigw-portal",
+      "name": "AI Gateway portal",
+      "enabled": true,
+      "publicClient": true,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["http://localhost:5173/*", "http://localhost:8081/*"],
+      "webOrigins": ["+"],
+      "attributes": { "pkce.code.challenge.method": "S256", "post.logout.redirect.uris": "+" },
+      "defaultClientScopes": ["basic", "web-origins", "roles", "profile", "email"],
+      "optionalClientScopes": ["offline_access"],
+      "protocolMappers": [
+        {
+          "name": "aigw-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "aigw-portal",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "alice",
+      "enabled": true,
+      "email": "alice@example.com",
+      "firstName": "Alice",
+      "lastName": "Admin",
+      "credentials": [{ "type": "password", "value": "alice", "temporary": false }],
+      "realmRoles": ["aigw-admin"]
+    },
+    {
+      "username": "bob",
+      "enabled": true,
+      "email": "bob@example.com",
+      "firstName": "Bob",
+      "lastName": "Operator",
+      "credentials": [{ "type": "password", "value": "bob", "temporary": false }],
+      "realmRoles": ["aigw-operator"]
+    },
+    {
+      "username": "carol",
+      "enabled": true,
+      "email": "carol@example.com",
+      "firstName": "Carol",
+      "lastName": "Viewer",
+      "credentials": [{ "type": "password", "value": "carol", "temporary": false }],
+      "realmRoles": ["aigw-viewer"]
+    },
+    {
+      "username": "dan",
+      "enabled": true,
+      "email": "dan@example.com",
+      "firstName": "Dan",
+      "lastName": "Norole",
+      "credentials": [{ "type": "password", "value": "dan", "temporary": false }],
+      "realmRoles": []
+    }
+  ]
+}

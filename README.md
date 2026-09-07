@@ -44,6 +44,16 @@ open http://localhost:8081            # portal — paste the admin key in Settin
 
 Portal development: `cd portal && npm install && npm run dev` (proxies `/admin` to `localhost:8081`).
 
+Control API with Keycloak (docs/spec/01 §3.1): the `oidc` compose profile starts Keycloak 26 with a dev realm
+(roles `aigw-admin` / `aigw-operator` / `aigw-viewer`, client `aigw-portal`, users alice/bob/carol/dan, password = username).
+
+```bash
+docker compose --profile oidc up -d keycloak      # console http://localhost:8180 (admin/admin), realm import ~30 s
+python ../../scripts/oidc_smoke.py                # tokens for each user → /admin/v1/me, POST org, audit actor check
+TOKEN=$(curl -s -d grant_type=password -d client_id=aigw-portal -d username=alice -d password=alice \n  localhost:8180/realms/aigw/protocol/openid-connect/token | jq -r .access_token)
+curl localhost:8081/admin/v1/me -H "authorization: Bearer $TOKEN"
+```
+
 Point a real deployment at your vLLM/KServe endpoint through the control API:
 
 ```bash

@@ -20,6 +20,8 @@ Services: `postgres:16`, `valkey/valkey:8`, `gateway`, `admin`, `worker`, option
 docker compose up -d
 docker compose exec admin aigw migrate
 docker compose exec admin aigw bootstrap   # creates org/team/project/model/deployment/key from bootstrap.yaml
+docker compose --profile oidc up -d keycloak   # optional: Keycloak 26 + dev realm for control-API bearer auth (01 §3.1)
+python scripts/oidc_smoke.py                   # end-to-end check: tokens → /admin/v1/me, scope denial, audit actor
 ```
 
 ## 3. Kubernetes — Helm + ArgoCD (`deploy/helm/ai-gateway`)

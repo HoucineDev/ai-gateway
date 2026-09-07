@@ -25,6 +25,7 @@ alembic revision --autogenerate -m "..."    # after editing src/aigw/db/models.p
 cd portal && npm install && npm run dev     # portal on :5173, proxies /admin to :8081
 cd portal && npm run build                  # admin role serves portal/dist at /
 cd deploy/compose && docker compose up -d --build
+docker compose --profile oidc up -d keycloak && python scripts/oidc_smoke.py   # Keycloak dev realm + control-API bearer smoke test
 ```
 
 Local dev env: `AIGW_DATABASE_URL`, `AIGW_VALKEY_URL`, `AIGW_ADMIN_KEY` (see `.env.example`). Mock upstream:

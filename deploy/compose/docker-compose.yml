@@ -36,7 +36,14 @@ services:
 
   admin:
     build: { context: ../.., dockerfile: deploy/compose/Dockerfile }
-    environment: { <<: *env, AIGW_ROLE: admin }
+    environment:
+      <<: *env
+      AIGW_ROLE: admin
+      # Keycloak bearer tokens on the control API (docs/spec/01 §3.1). Harmless while the `oidc` profile is not
+      # running: the admin key keeps working and bearer callers get 503 oidc_unavailable.
+      AIGW_OIDC_ISSUER: http://localhost:8180/realms/aigw
+      AIGW_OIDC_AUDIENCE: aigw-portal
+      AIGW_OIDC_JWKS_URL: http://keycloak:8080/realms/aigw/protocol/openid-connect/certs
     ports: ["8081:8080"]
     depends_on: { migrate: { condition: service_completed_successfully } }
 
@@ -45,6 +52,21 @@ services:
     command: ["aigw", "worker"]
     environment: { <<: *env, AIGW_ROLE: worker }
     depends_on: { migrate: { condition: service_completed_successfully } }
+
+  keycloak:
+    # Opt-in identity provider for the control API: docker compose --profile oidc up -d keycloak
+    # Imports deploy/compose/keycloak/realm-aigw.json (roles aigw-admin/operator/viewer, client aigw-portal,
+    # users alice/bob/carol/dan with password = username). Console: http://localhost:8180 (admin/admin).
+    image: quay.io/keycloak/keycloak:26.3
+    profiles: ["oidc"]
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HOSTNAME: http://localhost:8180  # pins `iss` so tokens verify whichever host fetched them
+      KC_HTTP_ENABLED: "true"
+    ports: ["8180:8080"]
+    volumes: ["./keycloak:/opt/keycloak/data/import:ro"]
 
 volumes:
   pgdata: {}

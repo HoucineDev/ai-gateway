@@ -91,7 +91,8 @@ mapping:
 Every route declares the scope it needs (`require_scope`, enforced by a test). Outcomes: 401 `invalid_token`,
 `unknown_signing_key`, `invalid_admin_key`, `admin_auth_required`, `oidc_not_configured`; 403 `missing_role` (valid
 token, no mapped role) and `insufficient_scope`. Audit rows record `actor_type=user` and `actor_id` = `preferred_username`
-(falling back to `sub`). Delegated tenant-level roles (org owner, project member) are a separate Phase 2 item and will
+(falling back to `sub`). The Keycloak client must keep the `basic` client scope (Keycloak ≥ 24 emits `sub` through
+it) and the `roles` scope; `deploy/compose/keycloak/realm-aigw.json` is a reference realm. Delegated tenant-level roles (org owner, project member) are a separate Phase 2 item and will
 narrow these scopes by tenant; this section is global role-based access.
 
 Pagination: `?limit&cursor` (opaque). IDs are UUIDv7 strings. Timestamps are RFC 3339 UTC.
