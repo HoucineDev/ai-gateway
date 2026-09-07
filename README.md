@@ -1,0 +1,79 @@
+# Independent AI Gateway
+
+Self-hosted AI gateway and management platform with **zero LiteLLM dependency**: our own API contracts, provider
+adapters, pricing registry, policy pipeline and data model. Built for local inference first (vLLM / KServe on
+Kubernetes) with hosted providers (OpenAI, Anthropic) alongside.
+
+Status: **Phase 1 functional alpha** (see `docs/spec/07-parity-backlog.md`). The specification lives in `docs/spec/`.
+
+## What works today
+
+| Area | Alpha |
+|------|-------|
+| Inference API | OpenAI-compatible `/v1/chat/completions` (streaming, tools, JSON modes), `/v1/embeddings`, `/v1/models` |
+| Providers | `openai_compat` (vLLM, KServe, TGI, Ollama…), `openai`, `anthropic` — direct HTTP, owned translation |
+| Tenancy | organizations → teams → projects → virtual keys (hashed, expiry, rotation with grace, revocation ≤ 1 s) |
+| Money | PostgreSQL ledger: reserve max cost before dispatch, settle actual after; per org/team/project/key budgets (total/daily/monthly), temporary increases, soft alerts; owned versioned price registry |
+| Reliability | capability-aware routing, priority + weighted selection, retries, cooldowns, fallback chains — never after the first client byte; ambiguous outcomes settle conservatively |
+| Limits | Valkey RPM/TPM (atomic Lua), documented fail-open/closed |
+| Governance | append-only audit log for every control write, per-request diagnostics with routing explanation, usage aggregation, Prometheus metrics |
+| Operations | one image, `gateway` / `admin` / `worker` roles; Compose stack with a mock upstream; Helm chart + ArgoCD example; independence gate in CI |
+
+## Quick start (local, no external credentials)
+
+```bash
+cd deploy/compose
+docker compose up -d --build              # postgres, valkey, mock-upstream, migrate+bootstrap, gateway, admin, worker
+docker compose logs migrate | grep key:   # the bootstrap virtual key
+
+curl -N localhost:8080/v1/chat/completions \
+  -H "authorization: Bearer $KEY" -H 'content-type: application/json' \
+  -d '{"model":"local-chat","stream":true,"messages":[{"role":"user","content":"hello"}]}'
+
+curl localhost:8081/admin/v1/overview -H 'x-admin-key: change-me-admin'
+```
+
+Point a real deployment at your vLLM/KServe endpoint through the control API:
+
+```bash
+curl -X POST localhost:8081/admin/v1/models/<model_id>/deployments -H 'x-admin-key: …' -H 'content-type: application/json' \
+  -d '{"name":"vllm-a100","provider":"openai_compat","provider_model":"Qwen/Qwen2.5-32B-Instruct",
+       "base_url":"http://vllm.inference.svc:8000/v1","credential_ref":"none","weight":3}'
+```
+
+## Development
+
+```bash
+pip install -e ".[dev]"
+# PostgreSQL 16 (db aigw_test, user aigw/aigw) and Valkey/Redis on localhost, or set AIGW_TEST_DATABASE_URL / AIGW_TEST_VALKEY_URL
+pytest -q
+python scripts/independence_gate.py
+```
+
+CLI: `aigw serve|worker|migrate|bootstrap|verify-restore|price`.
+
+## Layout
+
+```
+docs/spec/            Phase 0 specification (contracts, schema, adapters, routing/accounting, deployment, acceptance, backlog)
+src/aigw/core         canonical types, errors, pricing, tokens, secrets
+src/aigw/adapters     provider adapters (openai_compat, openai, anthropic) + registry
+src/aigw/gateway      snapshot, auth, ratelimit, accounting (ledger), router, pipeline, routes, metrics
+src/aigw/admin        control API (/admin/v1), audit, admin/OIDC auth
+src/aigw/worker       outbox consumer, reconciliation, key expiry
+src/aigw/db           SQLAlchemy models, migrations
+src/aigw/testing      mock OpenAI/Anthropic upstream
+deploy/               Compose, Dockerfile, Helm chart, ArgoCD example
+scripts/              independence gate
+.claude/skills/       vendored design skills for the portal work (ui-ux-pro-max, design-system, ui-styling)
+```
+
+## Independence
+
+No LiteLLM package, proxy, SDK, container, copied adapter code, runtime service, or pricing catalog. `scripts/independence_gate.py`
+scans dependencies, source imports, the installed environment, image layers and the SBOM; CI runs it on every change.
+LiteLLM's documentation is used only as a reference inventory of feature families (`docs/spec/07-parity-backlog.md`).
+
+## License
+
+Apache-2.0

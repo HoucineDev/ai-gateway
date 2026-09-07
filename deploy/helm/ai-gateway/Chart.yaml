@@ -1,0 +1,6 @@
+apiVersion: v2
+name: ai-gateway
+description: Independent AI Gateway — gateway, admin and worker roles
+type: application
+version: 0.1.0
+appVersion: "0.1.0a1"

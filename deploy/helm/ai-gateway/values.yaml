@@ -1,0 +1,45 @@
+image:
+  repository: ghcr.io/houcinedev/ai-gateway
+  tag: "0.1.0a1"
+  pullPolicy: IfNotPresent
+
+# Non-secret AIGW_* settings (docs/spec/05 §4). Secrets come from `existingSecret`.
+config:
+  AIGW_VALKEY_URL: redis://ai-gateway-valkey:6379/0
+  AIGW_CONFIG_REFRESH_SECONDS: "5"
+  AIGW_CONFIG_MAX_STALENESS_SECONDS: "300"
+  AIGW_RATELIMIT_FAIL_MODE: open
+  AIGW_MAX_ATTEMPTS: "3"
+
+# Secret with AIGW_DATABASE_URL, AIGW_ADMIN_KEY and provider credentials referenced by `env:` credential refs.
+existingSecret: ai-gateway-secrets
+
+gateway:
+  replicas: 2
+  resources: { requests: { cpu: 250m, memory: 256Mi }, limits: { cpu: "2", memory: 1Gi } }
+  autoscaling: { enabled: true, minReplicas: 2, maxReplicas: 10, targetCPU: 70 }
+  ingress:
+    enabled: true
+    className: nginx
+    host: ai-gateway.example.internal
+    annotations:
+      nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+      nginx.ingress.kubernetes.io/proxy-buffering: "off"
+
+admin:
+  replicas: 1
+  resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { cpu: "1", memory: 512Mi } }
+  ingress:
+    enabled: true
+    className: nginx-internal   # private admin ingress (proposal: surface controls)
+    host: ai-gateway-admin.example.internal
+
+worker:
+  replicas: 1
+  resources: { requests: { cpu: 100m, memory: 128Mi }, limits: { cpu: 500m, memory: 512Mi } }
+
+migrations:
+  enabled: true   # ArgoCD PreSync hook Job running `aigw migrate`
+
+podDisruptionBudget: { enabled: true, minAvailable: 1 }
+serviceMonitor: { enabled: false }

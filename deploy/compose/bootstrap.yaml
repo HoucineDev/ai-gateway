@@ -1,0 +1,35 @@
+# Applied by `aigw bootstrap` — idempotent. Replace mock deployments with your vLLM/KServe endpoints.
+prices:
+  - { provider: openai_compat, provider_model: mock-chat, input_per_million: 0.20, output_per_million: 0.60, source: internal-allocation }
+  - { provider: openai_compat, provider_model: mock-embed, input_per_million: 0.02, source: internal-allocation }
+  - { provider: anthropic, provider_model: claude-mock, input_per_million: 3, output_per_million: 15, source: bootstrap }
+
+models:
+  - name: local-chat
+    display_name: Local chat (mock)
+    supports_tools: true
+    supports_json_schema: true
+    context_window: 32768
+    deployments:
+      - { name: mock-a, provider: openai_compat, provider_model: mock-chat, base_url: http://mock-upstream:9000/v1, weight: 2 }
+      - { name: mock-b, provider: openai_compat, provider_model: mock-chat, base_url: http://mock-upstream:9000/v1, weight: 1 }
+  - name: local-embed
+    modalities: [embedding]
+    deployments:
+      - { name: mock-embed, provider: openai_compat, provider_model: mock-embed, base_url: http://mock-upstream:9000/v1 }
+  - name: claude
+    supports_tools: true
+    supports_vision: true
+    deployments:
+      - { name: anthropic-mock, provider: anthropic, provider_model: claude-mock, base_url: http://mock-upstream:9000, credential_ref: "env:ANTHROPIC_API_KEY" }
+
+organization:
+  name: Exaion
+  slug: exaion
+  team:
+    name: platform
+    project:
+      name: sandbox
+      settings: { allowed_tags: [env, feature, team] }
+      budget: { limit: 100, period: monthly, soft_alert_pct: 80 }
+      key: { name: sandbox-dev, rpm_limit: 600 }

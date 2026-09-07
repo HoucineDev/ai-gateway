@@ -1,0 +1,50 @@
+# Local development stack (docs/spec/05 §2). No external credentials needed: mock-upstream serves
+# OpenAI-compatible and Anthropic-compatible endpoints.
+services:
+  postgres:
+    image: postgres:16
+    environment: { POSTGRES_USER: aigw, POSTGRES_PASSWORD: aigw, POSTGRES_DB: aigw }
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U aigw"], interval: 5s, timeout: 5s, retries: 10 }
+
+  valkey:
+    image: valkey/valkey:8
+    ports: ["6379:6379"]
+
+  mock-upstream:
+    build: { context: ../.., dockerfile: deploy/compose/Dockerfile }
+    command: ["python", "-m", "aigw.testing.mock_upstream"]
+    ports: ["9000:9000"]
+
+  migrate:
+    build: { context: ../.., dockerfile: deploy/compose/Dockerfile }
+    command: ["sh", "-c", "aigw migrate && aigw bootstrap /etc/aigw/bootstrap.yaml"]
+    environment: &env
+      AIGW_DATABASE_URL: postgresql+asyncpg://aigw:aigw@postgres:5432/aigw
+      AIGW_VALKEY_URL: redis://valkey:6379/0
+      AIGW_ADMIN_KEY: ${AIGW_ADMIN_KEY:-change-me-admin}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-test-anthropic-key}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    depends_on: { postgres: { condition: service_healthy } }
+
+  gateway:
+    build: { context: ../.., dockerfile: deploy/compose/Dockerfile }
+    environment: { <<: *env, AIGW_ROLE: gateway }
+    ports: ["8080:8080"]
+    depends_on: { migrate: { condition: service_completed_successfully }, valkey: { condition: service_started } }
+
+  admin:
+    build: { context: ../.., dockerfile: deploy/compose/Dockerfile }
+    environment: { <<: *env, AIGW_ROLE: admin }
+    ports: ["8081:8080"]
+    depends_on: { migrate: { condition: service_completed_successfully } }
+
+  worker:
+    build: { context: ../.., dockerfile: deploy/compose/Dockerfile }
+    command: ["aigw", "worker"]
+    environment: { <<: *env, AIGW_ROLE: worker }
+    depends_on: { migrate: { condition: service_completed_successfully } }
+
+volumes:
+  pgdata: {}

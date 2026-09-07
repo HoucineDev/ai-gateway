@@ -1,0 +1,57 @@
+# 05 — Deployment topology and configuration
+
+## 1. Roles
+
+One container image, three roles selected by `AIGW_ROLE`:
+
+| Role | Serves | Scales on |
+|------|--------|-----------|
+| `gateway` | `/v1/*`, `/healthz`, `/metrics` | concurrent streams / RPS |
+| `admin` | `/admin/v1/*` (control API; later the portal's backend) | admin traffic (small) |
+| `worker` | outbox consumer, pending-attempt reconciliation, budget period roll, soft alerts, (Phase 2) active health checks and exports | queue depth |
+
+A portal outage (admin role down) does not affect gateway traffic: the gateway reads its config snapshot straight from PostgreSQL and continues with the last snapshot if the database is briefly unavailable (bounded by `AIGW_CONFIG_MAX_STALENESS_SECONDS`, default 300, after which the gateway returns 503 for new requests rather than enforcing stale policy).
+
+## 2. Local development — Docker Compose (`deploy/compose`)
+
+Services: `postgres:16`, `valkey/valkey:8`, `gateway`, `admin`, `worker`, optional `mock-upstream` (the test OpenAI-compatible server) so the whole user journey runs without external credentials.
+
+```
+docker compose up -d
+docker compose exec admin aigw migrate
+docker compose exec admin aigw bootstrap   # creates org/team/project/model/deployment/key from bootstrap.yaml
+```
+
+## 3. Kubernetes — Helm + ArgoCD (`deploy/helm/ai-gateway`)
+
+- Deployments per role with independent HPA; gateway `Service` behind the cluster ingress; admin on a private ingress class (proposal: "private admin ingress").
+- Config: `ConfigMap` for non-secret settings; secrets from `ExternalSecrets`/OpenBao in Phase 2 (alpha: Kubernetes `Secret` with `env:` credential refs).
+- `PodDisruptionBudget` for gateway; readiness gate = DB reachable **or** snapshot within staleness bound.
+- Migrations as an Argo pre-sync hook `Job` running `aigw migrate`.
+- Chart values expose image, replicas, resources, `AIGW_*` env, ingress hosts, and an `argocd` block with a sample multi-source `Application` for RKE2 clusters.
+
+## 4. Configuration (`AIGW_*`)
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `AIGW_ROLE` | `all` | gateway / admin / worker / all |
+| `AIGW_DATABASE_URL` | postgresql+asyncpg://… | durable authority |
+| `AIGW_VALKEY_URL` | redis://valkey:6379/0 | counters, cooldowns, invalidation |
+| `AIGW_ADMIN_KEY` | — | alpha control-API credential |
+| `AIGW_OIDC_ISSUER`, `AIGW_OIDC_AUDIENCE` | — | Keycloak JWT validation for control API (optional) |
+| `AIGW_CONFIG_REFRESH_SECONDS` | 5 | snapshot poll |
+| `AIGW_CONFIG_MAX_STALENESS_SECONDS` | 300 | fail-closed bound |
+| `AIGW_RATELIMIT_FAIL_MODE` | open | open / closed when Valkey unavailable |
+| `AIGW_MAX_ATTEMPTS` | 3 | per request |
+| `AIGW_ATTEMPT_TIMEOUT_SECONDS` | 900 | pending → ambiguous |
+| `AIGW_DEFAULT_MAX_OUTPUT_TOKENS` | 4096 | reservation bound when request omits max_tokens |
+| `AIGW_LOG_CONTENT` | false | include prompts/completions in logs (tenant opt-in later) |
+| `AIGW_OTEL_EXPORTER_OTLP_ENDPOINT` | — | traces/metrics export |
+
+## 5. Independence acceptance gate (CI)
+
+`scripts/independence_gate.py` fails when any of these contains `litellm` (case-insensitive): `pyproject.toml`, the lockfile, `pip freeze` output of the build environment, image layer file list (`docker image save | tar -t`), and the CycloneDX SBOM produced by `syft` in CI. The workflow `ci.yml` runs it on every pull request; it is a required check.
+
+## 6. Backup and restore
+
+PostgreSQL is the only stateful authority; Valkey is disposable. Restore drill (pilot gate): restore a nightly base backup + WAL to a scratch instance, run `aigw verify-restore` (row counts, latest audit event, budget totals equal Σ usage_events), then bring a gateway up against it and run the journey test.

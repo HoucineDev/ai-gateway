@@ -1,0 +1,71 @@
+{{- range $role := list "gateway" "admin" "worker" }}
+{{- $cfg := index $.Values $role }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $.Release.Name }}-{{ $role }}
+  labels: {{- include "aigw.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $role }}
+spec:
+  replicas: {{ $cfg.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $.Release.Name }}
+      app.kubernetes.io/component: {{ $role }}
+  template:
+    metadata:
+      labels: {{- include "aigw.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: {{ $role }}
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 10001 }
+      containers:
+        - name: {{ $role }}
+          image: "{{ $.Values.image.repository }}:{{ $.Values.image.tag }}"
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          {{- if eq $role "worker" }}
+          command: ["aigw", "worker"]
+          {{- else }}
+          command: ["aigw", "serve", "--port", "8080"]
+          ports: [{ name: http, containerPort: 8080 }]
+          readinessProbe: { httpGet: { path: /readyz, port: http }, periodSeconds: 5 }
+          livenessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 15 }
+          {{- end }}
+          env:
+            - name: AIGW_ROLE
+              value: {{ $role | quote }}
+          envFrom:
+            - configMapRef: { name: {{ $.Release.Name }}-config }
+            - secretRef: { name: {{ $.Values.existingSecret }} }
+          resources: {{- toYaml $cfg.resources | nindent 12 }}
+{{- if ne $role "worker" }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $.Release.Name }}-{{ $role }}
+  labels: {{- include "aigw.labels" $ | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+    app.kubernetes.io/component: {{ $role }}
+  ports: [{ name: http, port: 80, targetPort: http }]
+{{- if $cfg.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $.Release.Name }}-{{ $role }}
+  annotations: {{- toYaml ($cfg.ingress.annotations | default dict) | nindent 4 }}
+spec:
+  ingressClassName: {{ $cfg.ingress.className }}
+  rules:
+    - host: {{ $cfg.ingress.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: {{ $.Release.Name }}-{{ $role }}, port: { name: http } } }
+{{- end }}
+{{- end }}
+{{- end }}

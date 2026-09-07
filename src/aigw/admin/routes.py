@@ -1,0 +1,635 @@
+"""Control API /admin/v1 (docs/spec/01 §3). Every write is audited and bumps the config version when it
+affects the gateway snapshot."""
+
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+
+from fastapi import APIRouter, Depends, Query, Request
+from sqlalchemy import case, func, select
+
+from aigw.admin import schemas as S
+from aigw.admin.auth import Actor, require_admin
+from aigw.admin.service import (
+    audit,
+    bump_config,
+    current_config_version,
+    get_or_404,
+    parse_uuid,
+    publish_key_invalidation,
+    to_dict,
+)
+from aigw.core.errors import ErrorType, GatewayError
+from aigw.db.models import (
+    AuditEvent,
+    Budget,
+    Deployment,
+    Model,
+    Organization,
+    Price,
+    Project,
+    RequestAttempt,
+    Team,
+    UsageEvent,
+    VirtualKey,
+)
+from aigw.gateway.auth import generate_key
+
+router = APIRouter(prefix="/admin/v1", dependencies=[Depends(require_admin)])
+
+
+def _db(request: Request):
+    return request.app.state.db
+
+
+# ---- organizations ------------------------------------------------------
+
+
+@router.post("/organizations", status_code=201)
+async def create_org(body: S.OrgCreate, request: Request, actor: Actor = Depends(require_admin)):
+    async with _db(request).tx() as s:
+        if (await s.execute(select(Organization).where(Organization.slug == body.slug))).scalar_one_or_none():
+            raise GatewayError(ErrorType.invalid_request, "slug already exists", code="conflict", param="slug")
+        org = Organization(name=body.name, slug=body.slug, settings=body.settings)
+        s.add(org)
+        await s.flush()
+        audit(s, actor, "organization.create", "organization", org.id, after=to_dict(org), org_id=org.id)
+        return to_dict(org)
+
+
+@router.get("/organizations")
+async def list_orgs(request: Request, limit: int = Query(50, le=200)):
+    async with _db(request).session() as s:
+        rows = (await s.execute(select(Organization).order_by(Organization.created_at.desc()).limit(limit))).scalars()
+        return {"data": [to_dict(o) for o in rows]}
+
+
+@router.get("/organizations/{org_id}")
+async def get_org(org_id: str, request: Request):
+    async with _db(request).session() as s:
+        return to_dict(await get_or_404(s, Organization, org_id, "organization"))
+
+
+@router.patch("/organizations/{org_id}")
+async def patch_org(org_id: str, body: S.OrgPatch, request: Request, actor: Actor = Depends(require_admin)):
+    async with _db(request).tx() as s:
+        org = await get_or_404(s, Organization, org_id, "organization")
+        before = to_dict(org)
+        for k, v in body.model_dump(exclude_none=True).items():
+            setattr(org, k, v)
+        audit(s, actor, "organization.update", "organization", org.id, before, to_dict(org), org.id)
+        return to_dict(org)
+
+
+# ---- teams / projects ---------------------------------------------------
+
+
+@router.post("/organizations/{org_id}/teams", status_code=201)
+async def create_team(org_id: str, body: S.TeamCreate, request: Request, actor: Actor = Depends(require_admin)):
+    async with _db(request).tx() as s:
+        org = await get_or_404(s, Organization, org_id, "organization")
+        team = Team(org_id=org.id, name=body.name, settings=body.settings)
+        s.add(team)
+        await s.flush()
+        audit(s, actor, "team.create", "team", team.id, after=to_dict(team), org_id=org.id)
+        return to_dict(team)
+
+
+@router.get("/organizations/{org_id}/teams")
+async def list_teams(org_id: str, request: Request):
+    async with _db(request).session() as s:
+        rows = (await s.execute(select(Team).where(Team.org_id == parse_uuid(org_id)).order_by(Team.name))).scalars()
+        return {"data": [to_dict(t) for t in rows]}
+
+
+@router.get("/teams/{team_id}")
+async def get_team(team_id: str, request: Request):
+    async with _db(request).session() as s:
+        return to_dict(await get_or_404(s, Team, team_id, "team"))
+
+
+@router.patch("/teams/{team_id}")
+async def patch_team(team_id: str, body: S.NamePatch, request: Request, actor: Actor = Depends(require_admin)):
+    async with _db(request).tx() as s:
+        t = await get_or_404(s, Team, team_id, "team")
+        before = to_dict(t)
+        for k, v in body.model_dump(exclude_none=True).items():
+            setattr(t, k, v)
+        audit(s, actor, "team.update", "team", t.id, before, to_dict(t), t.org_id)
+        return to_dict(t)
+
+
+@router.post("/teams/{team_id}/projects", status_code=201)
+async def create_project(team_id: str, body: S.ProjectCreate, request: Request, actor: Actor = Depends(require_admin)):
+    async with _db(request).tx() as s:
+        team = await get_or_404(s, Team, team_id, "team")
+        p = Project(org_id=team.org_id, team_id=team.id, name=body.name, settings=body.settings)
+        s.add(p)
+        await s.flush()
+        audit(s, actor, "project.create", "project", p.id, after=to_dict(p), org_id=team.org_id)
+        bump_config(s, f"project.create {p.id}")
+        return to_dict(p)
+
+
+@router.get("/teams/{team_id}/projects")
+async def list_projects(team_id: str, request: Request):
+    async with _db(request).session() as s:
+        rows = (
+            await s.execute(select(Project).where(Project.team_id == parse_uuid(team_id)).order_by(Project.name))
+        ).scalars()
+        return {"data": [to_dict(p) for p in rows]}
+
+
+@router.get("/projects/{project_id}")
+async def get_project(project_id: str, request: Request):
+    async with _db(request).session() as s:
+        return to_dict(await get_or_404(s, Project, project_id, "project"))
+
+
+@router.patch("/projects/{project_id}")
+async def patch_project(project_id: str, body: S.NamePatch, request: Request, actor: Actor = Depends(require_admin)):
+    async with _db(request).tx() as s:
+        p = await get_or_404(s, Project, project_id, "project")
+        before = to_dict(p)
+        for k, v in body.model_dump(exclude_none=True).items():
+            setattr(p, k, v)
+        audit(s, actor, "project.update", "project", p.id, before, to_dict(p), p.org_id)
+        bump_config(s, f"project.update {p.id}")
+        return to_dict(p)
+
+
+# ---- keys ---------------------------------------------------------------
+
+
+@router.post("/projects/{project_id}/keys", status_code=201)
+async def create_key(project_id: str, body: S.KeyCreate, request: Request, actor: Actor = Depends(require_admin)):
+    async with _db(request).tx() as s:
+        p = await get_or_404(s, Project, project_id, "project")
+        plaintext, key_hash, prefix = generate_key()
+        k = VirtualKey(
+            org_id=p.org_id,
+            team_id=p.team_id,
+            project_id=p.id,
+            name=body.name,
+            key_prefix=prefix,
+            key_hash=key_hash,
+            expires_at=body.expires_at,
+            allowed_models=body.allowed_models,
+            rpm_limit=body.rpm_limit,
+            tpm_limit=body.tpm_limit,
+            metadata_=body.metadata,
+        )
+        s.add(k)
+        await s.flush()
+        audit(s, actor, "key.create", "key", k.id, after=to_dict(k), org_id=p.org_id)
+        bump_config(s, f"key.create {k.id}")
+        return {**to_dict(k), "key": plaintext}
+
+
+@router.get("/projects/{project_id}/keys")
+async def list_keys(project_id: str, request: Request):
+    async with _db(request).session() as s:
+        rows = (
+            await s.execute(
+                select(VirtualKey)
+                .where(VirtualKey.project_id == parse_uuid(project_id))
+                .order_by(VirtualKey.created_at.desc())
+            )
+        ).scalars()
+        return {"data": [to_dict(k) for k in rows]}
+
+
+@router.get("/keys/{key_id}")
+async def get_key(key_id: str, request: Request):
+    async with _db(request).session() as s:
+        return to_dict(await get_or_404(s, VirtualKey, key_id, "key"))
+
+
+@router.post("/keys/{key_id}/revoke")
+async def revoke_key(key_id: str, request: Request, actor: Actor = Depends(require_admin)):
+    async with _db(request).tx() as s:
+        k = await get_or_404(s, VirtualKey, key_id, "key")
+        before = to_dict(k)
+        k.status, k.revoked_at, k.grace_until = "revoked", datetime.now(UTC), None
+        audit(s, actor, "key.revoke", "key", k.id, before, to_dict(k), k.org_id)
+        bump_config(s, f"key.revoke {k.id}")
+        key_hash = k.key_hash
+        out = to_dict(k)
+    await publish_key_invalidation(request.app.state.valkey, key_hash)
+    return out
+
+
+@router.post("/keys/{key_id}/rotate", status_code=201)
+async def rotate_key(key_id: str, body: S.KeyRotate, request: Request, actor: Actor = Depends(require_admin)):
+    async with _db(request).tx() as s:
+        old = await get_or_404(s, VirtualKey, key_id, "key")
+        if old.status != "active":
+            raise GatewayError(ErrorType.invalid_request, "only active keys can be rotated", code="key_not_active")
+        plaintext, key_hash, prefix = generate_key()
+        new = VirtualKey(
+            org_id=old.org_id,
+            team_id=old.team_id,
+            project_id=old.project_id,
+            name=old.name,
+            key_prefix=prefix,
+            key_hash=key_hash,
+            expires_at=old.expires_at,
+            allowed_models=old.allowed_models,
+            rpm_limit=old.rpm_limit,
+            tpm_limit=old.tpm_limit,
+            metadata_=old.metadata_,
+            rotated_from=old.id,
+        )
+        old.status = "revoked"
+        old.revoked_at = datetime.now(UTC)
+        old.grace_until = old.revoked_at + timedelta(seconds=body.grace_seconds)
+        s.add(new)
+        await s.flush()
+        audit(
+            s,
+            actor,
+            "key.rotate",
+            "key",
+            old.id,
+            after={"new_key_id": str(new.id), "grace_until": old.grace_until.isoformat()},
+            org_id=old.org_id,
+        )
+        bump_config(s, f"key.rotate {old.id}")
+        return {**to_dict(new), "key": plaintext, "previous_key_grace_until": old.grace_until.isoformat()}
+
+
+# ---- models / deployments / prices -------------------------------------
+
+
+@router.post("/models", status_code=201)
+async def create_model(body: S.ModelCreate, request: Request, actor: Actor = Depends(require_admin)):
+    async with _db(request).tx() as s:
+        org_id = parse_uuid(body.org_id, "org_id") if body.org_id else None
+        m = Model(
+            org_id=org_id,
+            name=body.name,
+            display_name=body.display_name,
+            modalities=body.modalities,
+            context_window=body.context_window,
+            supports_tools=body.supports_tools,
+            supports_json_schema=body.supports_json_schema,
+            supports_vision=body.supports_vision,
+            metadata_=body.metadata,
+        )
+        s.add(m)
+        await s.flush()
+        audit(s, actor, "model.create", "model", m.id, after=to_dict(m), org_id=org_id)
+        bump_config(s, f"model.create {m.id}")
+        return to_dict(m)
+
+
+@router.get("/models")
+async def list_models(request: Request, org_id: str | None = None):
+    async with _db(request).session() as s:
+        q = select(Model).order_by(Model.name)
+        if org_id:
+            q = q.where((Model.org_id == parse_uuid(org_id)) | (Model.org_id.is_(None)))
+        models = list((await s.execute(q)).scalars())
+        deps = (await s.execute(select(Deployment).where(Deployment.model_id.in_([m.id for m in models])))).scalars()
+        by_model: dict[uuid.UUID, list] = {}
+        for d in deps:
+            by_model.setdefault(d.model_id, []).append(to_dict(d))
+        return {"data": [{**to_dict(m), "deployments": by_model.get(m.id, [])} for m in models]}
+
+
+@router.patch("/models/{model_id}")
+async def patch_model(model_id: str, body: S.ModelPatch, request: Request, actor: Actor = Depends(require_admin)):
+    async with _db(request).tx() as s:
+        m = await get_or_404(s, Model, model_id, "model")
+        before = to_dict(m)
+        for k, v in body.model_dump(exclude_none=True).items():
+            setattr(m, "metadata_" if k == "metadata" else k, v)
+        audit(s, actor, "model.update", "model", m.id, before, to_dict(m), m.org_id)
+        bump_config(s, f"model.update {m.id}")
+        return to_dict(m)
+
+
+@router.post("/models/{model_id}/deployments", status_code=201)
+async def create_deployment(
+    model_id: str, body: S.DeploymentCreate, request: Request, actor: Actor = Depends(require_admin)
+):
+    async with _db(request).tx() as s:
+        m = await get_or_404(s, Model, model_id, "model")
+        d = Deployment(model_id=m.id, org_id=m.org_id, **body.model_dump())
+        s.add(d)
+        await s.flush()
+        audit(s, actor, "deployment.create", "deployment", d.id, after=to_dict(d), org_id=m.org_id)
+        bump_config(s, f"deployment.create {d.id}")
+        return to_dict(d)
+
+
+@router.patch("/deployments/{deployment_id}")
+async def patch_deployment(
+    deployment_id: str, body: S.DeploymentPatch, request: Request, actor: Actor = Depends(require_admin)
+):
+    async with _db(request).tx() as s:
+        d = await get_or_404(s, Deployment, deployment_id, "deployment")
+        before = to_dict(d)
+        for k, v in body.model_dump(exclude_none=True).items():
+            setattr(d, k, v)
+        audit(s, actor, "deployment.update", "deployment", d.id, before, to_dict(d), d.org_id)
+        bump_config(s, f"deployment.update {d.id}")
+        return to_dict(d)
+
+
+@router.post("/deployments/{deployment_id}/cooldown")
+async def cooldown_deployment(
+    deployment_id: str, body: S.CooldownRequest, request: Request, actor: Actor = Depends(require_admin)
+):
+    async with _db(request).tx() as s:
+        d = await get_or_404(s, Deployment, deployment_id, "deployment")
+        before = to_dict(d)
+        d.cooldown_until = datetime.now(UTC) + timedelta(seconds=body.seconds) if body.seconds else None
+        audit(s, actor, "deployment.cooldown", "deployment", d.id, before, to_dict(d), d.org_id)
+        bump_config(s, f"deployment.cooldown {d.id}")
+        return to_dict(d)
+
+
+@router.post("/prices", status_code=201)
+async def create_price(body: S.PriceCreate, request: Request, actor: Actor = Depends(require_admin)):
+    async with _db(request).tx() as s:
+        latest = (
+            await s.execute(
+                select(func.max(Price.version)).where(
+                    Price.provider == body.provider, Price.provider_model == body.provider_model
+                )
+            )
+        ).scalar()
+        p = Price(
+            provider=body.provider,
+            provider_model=body.provider_model,
+            version=(latest or 0) + 1,
+            input_per_million=body.input_per_million,
+            output_per_million=body.output_per_million,
+            cached_input_per_million=body.cached_input_per_million,
+            reasoning_per_million=body.reasoning_per_million,
+            effective_from=body.effective_from or datetime.now(UTC),
+            source=body.source,
+            reviewed_by=body.reviewed_by,
+        )
+        s.add(p)
+        await s.flush()
+        audit(s, actor, "price.create", "price", p.id, after=to_dict(p))
+        bump_config(s, f"price.create {p.id}")
+        return to_dict(p)
+
+
+@router.get("/prices")
+async def list_prices(request: Request, provider: str | None = None):
+    async with _db(request).session() as s:
+        q = select(Price).order_by(Price.provider, Price.provider_model, Price.version.desc())
+        if provider:
+            q = q.where(Price.provider == provider)
+        return {"data": [to_dict(p) for p in (await s.execute(q)).scalars()]}
+
+
+# ---- budgets ------------------------------------------------------------
+
+_SCOPE_MODEL = {"organization": Organization, "team": Team, "project": Project, "key": VirtualKey}
+
+
+@router.post("/budgets", status_code=201)
+async def create_budget(body: S.BudgetCreate, request: Request, actor: Actor = Depends(require_admin)):
+    async with _db(request).tx() as s:
+        target = await get_or_404(s, _SCOPE_MODEL[body.scope_type], body.scope_id, body.scope_type)
+        org_id = target.id if body.scope_type == "organization" else target.org_id
+        existing = (
+            await s.execute(
+                select(Budget).where(
+                    Budget.scope_type == body.scope_type, Budget.scope_id == target.id, Budget.period == body.period
+                )
+            )
+        ).scalar_one_or_none()
+        if existing:
+            raise GatewayError(
+                ErrorType.invalid_request, "budget already exists for this scope/period", code="conflict"
+            )
+        b = Budget(
+            org_id=org_id,
+            scope_type=body.scope_type,
+            scope_id=target.id,
+            limit_amount=body.limit_amount,
+            period=body.period,
+            soft_alert_pct=body.soft_alert_pct,
+            period_start=datetime.now(UTC),
+        )
+        s.add(b)
+        await s.flush()
+        audit(s, actor, "budget.create", "budget", b.id, after=to_dict(b), org_id=org_id)
+        return to_dict(b)
+
+
+@router.get("/budgets")
+async def list_budgets(
+    request: Request, scope_type: str | None = None, scope_id: str | None = None, org_id: str | None = None
+):
+    async with _db(request).session() as s:
+        q = select(Budget).order_by(Budget.created_at.desc())
+        if scope_type:
+            q = q.where(Budget.scope_type == scope_type)
+        if scope_id:
+            q = q.where(Budget.scope_id == parse_uuid(scope_id, "scope_id"))
+        if org_id:
+            q = q.where(Budget.org_id == parse_uuid(org_id, "org_id"))
+        return {"data": [_budget_view(b) for b in (await s.execute(q)).scalars()]}
+
+
+def _budget_view(b: Budget) -> dict:
+    d = to_dict(b)
+    limit = Decimal(b.limit_amount)
+    if b.temporary_until and b.temporary_until > datetime.now(UTC):
+        limit += Decimal(b.temporary_increase or 0)
+    d["available_amount"] = format(limit - Decimal(b.spent_amount) - Decimal(b.reserved_amount), "f")
+    return d
+
+
+@router.patch("/budgets/{budget_id}")
+async def patch_budget(budget_id: str, body: S.BudgetPatch, request: Request, actor: Actor = Depends(require_admin)):
+    async with _db(request).tx() as s:
+        b = await get_or_404(s, Budget, budget_id, "budget")
+        before = to_dict(b)
+        for k, v in body.model_dump(exclude_none=True).items():
+            setattr(b, k, v)
+        audit(s, actor, "budget.update", "budget", b.id, before, to_dict(b), b.org_id)
+        return _budget_view(b)
+
+
+@router.post("/budgets/{budget_id}/temporary-increase")
+async def temporary_increase(
+    budget_id: str, body: S.TemporaryIncrease, request: Request, actor: Actor = Depends(require_admin)
+):
+    async with _db(request).tx() as s:
+        b = await get_or_404(s, Budget, budget_id, "budget")
+        before = to_dict(b)
+        b.temporary_increase, b.temporary_until = body.amount, body.until
+        audit(s, actor, "budget.temporary_increase", "budget", b.id, before, to_dict(b), b.org_id)
+        return _budget_view(b)
+
+
+# ---- usage / requests / audit / config ----------------------------------
+
+
+@router.get("/usage")
+async def usage(
+    request: Request,
+    scope_type: str = Query(pattern="^(organization|team|project|key)$"),
+    scope_id: str = Query(...),
+    from_: datetime | None = Query(default=None, alias="from"),
+    to: datetime | None = None,
+    group_by: str = Query("model", pattern="^(model|day|key|deployment)$"),
+):
+    col = {
+        "organization": UsageEvent.org_id,
+        "team": UsageEvent.team_id,
+        "project": UsageEvent.project_id,
+        "key": UsageEvent.key_id,
+    }[scope_type]
+    group_col = {
+        "model": UsageEvent.model_name,
+        "day": func.date_trunc("day", UsageEvent.created_at),
+        "key": UsageEvent.key_id,
+        "deployment": UsageEvent.deployment_id,
+    }[group_by]
+    async with _db(request).session() as s:
+        q = select(
+            group_col.label("group"),
+            func.count().label("requests"),
+            func.sum(UsageEvent.prompt_tokens).label("prompt_tokens"),
+            func.sum(UsageEvent.completion_tokens).label("completion_tokens"),
+            func.sum(UsageEvent.cost).label("cost"),
+        ).where(col == parse_uuid(scope_id, "scope_id"))
+        if from_:
+            q = q.where(UsageEvent.created_at >= from_)
+        if to:
+            q = q.where(UsageEvent.created_at < to)
+        rows = (await s.execute(q.group_by("group").order_by("group"))).all()
+        data = [
+            {
+                "group": (str(r.group) if not isinstance(r.group, datetime) else r.group.date().isoformat()),
+                "requests": r.requests,
+                "prompt_tokens": int(r.prompt_tokens or 0),
+                "completion_tokens": int(r.completion_tokens or 0),
+                "cost": str(r.cost or 0),
+            }
+            for r in rows
+        ]
+        return {
+            "scope_type": scope_type,
+            "scope_id": scope_id,
+            "group_by": group_by,
+            "data": data,
+            "total_cost": str(sum((Decimal(d["cost"]) for d in data), Decimal(0))),
+        }
+
+
+@router.get("/requests/{request_id}")
+async def get_request(request_id: str, request: Request):
+    async with _db(request).session() as s:
+        rid = parse_uuid(request_id, "request_id")
+        attempts = list(
+            (
+                await s.execute(
+                    select(RequestAttempt).where(RequestAttempt.request_id == rid).order_by(RequestAttempt.attempt_no)
+                )
+            ).scalars()
+        )
+        if not attempts:
+            raise GatewayError(ErrorType.not_found, "request not found", code="request_not_found")
+        events = list((await s.execute(select(UsageEvent).where(UsageEvent.request_id == rid))).scalars())
+        return {
+            "request_id": request_id,
+            "attempts": [to_dict(a) for a in attempts],
+            "usage": [to_dict(e) for e in events],
+        }
+
+
+@router.get("/requests")
+async def list_requests(
+    request: Request,
+    project_id: str | None = None,
+    key_id: str | None = None,
+    org_id: str | None = None,
+    limit: int = Query(50, le=500),
+):
+    async with _db(request).session() as s:
+        q = select(UsageEvent).order_by(UsageEvent.created_at.desc()).limit(limit)
+        if project_id:
+            q = q.where(UsageEvent.project_id == parse_uuid(project_id, "project_id"))
+        if key_id:
+            q = q.where(UsageEvent.key_id == parse_uuid(key_id, "key_id"))
+        if org_id:
+            q = q.where(UsageEvent.org_id == parse_uuid(org_id, "org_id"))
+        return {"data": [to_dict(e) for e in (await s.execute(q)).scalars()]}
+
+
+@router.get("/audit")
+async def list_audit(
+    request: Request,
+    target_type: str | None = None,
+    target_id: str | None = None,
+    org_id: str | None = None,
+    limit: int = Query(100, le=1000),
+):
+    async with _db(request).session() as s:
+        q = select(AuditEvent).order_by(AuditEvent.created_at.desc()).limit(limit)
+        if target_type:
+            q = q.where(AuditEvent.target_type == target_type)
+        if target_id:
+            q = q.where(AuditEvent.target_id == parse_uuid(target_id, "target_id"))
+        if org_id:
+            q = q.where(AuditEvent.org_id == parse_uuid(org_id, "org_id"))
+        return {"data": [to_dict(a) for a in (await s.execute(q)).scalars()]}
+
+
+@router.get("/config/version")
+async def config_version(request: Request):
+    async with _db(request).session() as s:
+        return {"version": await current_config_version(s)}
+
+
+@router.get("/overview")
+async def overview(request: Request, org_id: str | None = None, hours: int = Query(24, ge=1, le=24 * 90)):
+    """Traffic, latency, failures and spend for the portal overview."""
+    since = datetime.now(UTC) - timedelta(hours=hours)
+    async with _db(request).session() as s:
+        base = select(UsageEvent).where(UsageEvent.created_at >= since)
+        if org_id:
+            base = base.where(UsageEvent.org_id == parse_uuid(org_id, "org_id"))
+        sub = base.subquery()
+        totals = (
+            await s.execute(
+                select(
+                    func.count(),
+                    func.sum(sub.c.cost),
+                    func.sum(sub.c.prompt_tokens + sub.c.completion_tokens),
+                    func.percentile_cont(0.95).within_group(sub.c.latency_ms),
+                    func.sum(case((sub.c.status != "succeeded", 1), else_=0)),
+                )
+            )
+        ).one()
+        by_model = (
+            await s.execute(
+                select(sub.c.model_name, func.count(), func.sum(sub.c.cost))
+                .group_by(sub.c.model_name)
+                .order_by(func.count().desc())
+                .limit(10)
+            )
+        ).all()
+        by_status = (await s.execute(select(sub.c.status, func.count()).group_by(sub.c.status))).all()
+        return {
+            "since": since.isoformat(),
+            "requests": totals[0],
+            "cost": str(totals[1] or 0),
+            "tokens": int(totals[2] or 0),
+            "p95_latency_ms": float(totals[3]) if totals[3] is not None else None,
+            "failed": int(totals[4] or 0),
+            "by_model": [{"model": r[0], "requests": r[1], "cost": str(r[2] or 0)} for r in by_model],
+            "by_status": {r[0]: r[1] for r in by_status},
+        }
