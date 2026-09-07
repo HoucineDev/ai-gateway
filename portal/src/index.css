@@ -1,0 +1,49 @@
+@import "tailwindcss";
+
+/* Design tokens — generated with the ui-ux-pro-max design-system query ("Dark tech + status green").
+   Semantic tokens only; components never use raw hex. */
+@theme {
+  --font-sans: "Fira Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Fira Code", ui-monospace, SFMono-Regular, monospace;
+
+  --color-primary: #1e293b;
+  --color-on-primary: #ffffff;
+  --color-secondary: #334155;
+  --color-accent: #22c55e;
+  --color-on-accent: #0f172a;
+  --color-background: #0f172a;
+  --color-foreground: #f8fafc;
+  --color-card: #1b2336;
+  --color-card-foreground: #f8fafc;
+  --color-muted: #272f42;
+  --color-muted-foreground: #a3b0c4; /* lifted from #94A3B8 to keep ≥4.5:1 on card surfaces */
+  --color-border: #475569;
+  --color-destructive: #ef4444;
+  --color-warning: #f59e0b;
+  --color-info: #38bdf8;
+  --color-ring: #ffffff;
+}
+
+html, body, #root { height: 100%; }
+body { @apply bg-background text-foreground font-sans antialiased text-[15px] leading-normal; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+:focus-visible { outline: 2px solid var(--color-ring); outline-offset: 2px; border-radius: 4px; }
+
+.btn { @apply inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors duration-150 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed min-h-10; }
+.btn-primary { @apply bg-accent text-on-accent hover:bg-green-400; }
+.btn-secondary { @apply bg-secondary text-foreground hover:bg-slate-600 border border-border; }
+.btn-danger { @apply bg-destructive/90 text-white hover:bg-destructive; }
+.btn-ghost { @apply text-muted-foreground hover:text-foreground hover:bg-muted; }
+.input { @apply w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground min-h-10 focus:border-accent; }
+.label { @apply block text-sm font-medium text-muted-foreground mb-1; }
+.card { @apply rounded-lg border border-border bg-card p-5; }
+.table { @apply w-full text-sm; }
+.table th { @apply text-left text-xs uppercase tracking-wide text-muted-foreground font-medium px-3 py-2 border-b border-border; }
+.table td { @apply px-3 py-2 border-b border-border/60 align-top; }
+.table tbody tr:hover { @apply bg-muted/50; }
+.badge { @apply inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium border; }
+.mono { @apply font-mono text-[13px] whitespace-nowrap; }

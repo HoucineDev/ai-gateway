@@ -19,6 +19,14 @@ Status: **Phase 1 functional alpha** (see `docs/spec/07-parity-backlog.md`). The
 | Governance | append-only audit log for every control write, per-request diagnostics with routing explanation, usage aggregation, Prometheus metrics |
 | Operations | one image, `gateway` / `admin` / `worker` roles; Compose stack with a mock upstream; Helm chart + ArgoCD example; independence gate in CI |
 
+## Portal
+
+The admin role serves the React portal (`portal/`, built with Vite/Tailwind, designed with the vendored
+`ui-ux-pro-max` skill): overview, models & deployments, organizations/teams/projects/keys, budgets, request
+diagnostics with routing explanations, and the audit log.
+
+![Overview](docs/portal-overview.png)
+
 ## Quick start (local, no external credentials)
 
 ```bash
@@ -31,7 +39,10 @@ curl -N localhost:8080/v1/chat/completions \
   -d '{"model":"local-chat","stream":true,"messages":[{"role":"user","content":"hello"}]}'
 
 curl localhost:8081/admin/v1/overview -H 'x-admin-key: change-me-admin'
+open http://localhost:8081            # portal — paste the admin key in Settings
 ```
+
+Portal development: `cd portal && npm install && npm run dev` (proxies `/admin` to `localhost:8081`).
 
 Point a real deployment at your vLLM/KServe endpoint through the control API:
 

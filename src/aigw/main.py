@@ -120,7 +120,41 @@ def create_app(
         from aigw.admin.routes import router as admin_router
 
         app.include_router(admin_router)
+        if settings.cors_origins:
+            from fastapi.middleware.cors import CORSMiddleware
+
+            app.add_middleware(
+                CORSMiddleware,
+                allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
+                allow_methods=["*"],
+                allow_headers=["*"],
+            )
+        _mount_portal(app, settings.portal_dir)
     return app
+
+
+def _mount_portal(app: FastAPI, portal_dir: str | None) -> None:
+    """Serve the built React portal (SPA fallback to index.html) from the admin role."""
+    import os
+
+    candidates = [portal_dir] if portal_dir else [
+        os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "portal", "dist"),
+        "/app/portal",
+    ]
+    for d in candidates:
+        if d and os.path.isfile(os.path.join(d, "index.html")):
+            from fastapi.staticfiles import StaticFiles
+            from starlette.responses import FileResponse
+
+            app.mount("/assets", StaticFiles(directory=os.path.join(d, "assets")), name="portal-assets")
+            index = os.path.join(d, "index.html")
+
+            @app.get("/{path:path}", include_in_schema=False)
+            async def portal(path: str):  # noqa: ARG001
+                return FileResponse(index)
+
+            log.info("portal mounted from %s", d)
+            return
 
 
 class InvalidationListener:

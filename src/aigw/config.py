@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     ledger_currency: str = "USD"
 
     otel_exporter_otlp_endpoint: str | None = Field(default=None)
+    cors_origins: str = ""  # comma-separated origins allowed on the control API (portal dev server)
+    portal_dir: str | None = None  # built portal (portal/dist) served by the admin role at /
 
 
 @lru_cache
