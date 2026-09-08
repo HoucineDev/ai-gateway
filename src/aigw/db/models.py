@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -11,6 +11,7 @@ from sqlalchemy import (
     ARRAY,
     BigInteger,
     Boolean,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -301,6 +302,47 @@ class UsageEvent(Base):
 
 
 # ---- governance ------------------------------------------------------------
+
+
+class Invoice(Base):
+    """A provider bill for one period (docs/spec/04 §10); lines are reconciled against settled usage."""
+
+    __tablename__ = "invoices"
+    id: Mapped[uuid.UUID] = _pk()
+    provider: Mapped[str] = mapped_column(String(40), index=True)
+    period_start: Mapped[date] = mapped_column(Date)
+    period_end: Mapped[date] = mapped_column(Date)
+    currency: Mapped[str] = mapped_column(String(3), default="USD")
+    source: Mapped[str | None] = mapped_column(String(200))  # export name / file / URL
+    status: Mapped[str] = mapped_column(String(20), default="open")  # open | matched | mismatch
+    invoice_total: Mapped[Decimal | None] = mapped_column(MONEY)
+    ledger_total: Mapped[Decimal | None] = mapped_column(MONEY)
+    delta_amount: Mapped[Decimal | None] = mapped_column(MONEY)
+    report: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    reconciled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[str] = mapped_column(String(200))
+    created_at: Mapped[datetime] = _created()
+
+
+class InvoiceLine(Base):
+    __tablename__ = "invoice_lines"
+    __table_args__ = (UniqueConstraint("invoice_id", "provider_model", "day"),)
+    id: Mapped[uuid.UUID] = _pk()
+    invoice_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("invoices.id", ondelete="CASCADE"), index=True)
+    provider_model: Mapped[str] = mapped_column(String(200))
+    day: Mapped[date] = mapped_column(Date)
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer)
+    amount: Mapped[Decimal] = mapped_column(MONEY)
+    meta: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    # filled by a reconcile run
+    status: Mapped[str | None] = mapped_column(String(20))  # matched | amount_mismatch | token_mismatch | unmatched
+    ledger_amount: Mapped[Decimal | None] = mapped_column(MONEY)
+    ledger_prompt_tokens: Mapped[int | None] = mapped_column(Integer)
+    ledger_completion_tokens: Mapped[int | None] = mapped_column(Integer)
+    ledger_requests: Mapped[int | None] = mapped_column(Integer)
+    ledger_ambiguous: Mapped[int | None] = mapped_column(Integer)
+    delta_amount: Mapped[Decimal | None] = mapped_column(MONEY)
 
 
 class AuditEvent(Base):

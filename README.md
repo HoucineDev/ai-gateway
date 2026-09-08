@@ -50,6 +50,10 @@ Load test (docs/spec/06): `python scripts/loadtest.py --key $KEY --requests 500 
 reports RPS, TTFB/total p50/p95/p99, error codes and the gateway's *added* latency against the mock upstream; add
 `--max-added-p95-ms 25 --max-error-rate 0.01` to fail the run in CI.
 
+Invoice reconciliation (docs/spec/04 §10): import a provider bill (JSON or the CSV every provider export reduces to:
+`provider_model, day, amount[, prompt_tokens, completion_tokens]`) and reconcile it against what the ledger settled for
+that provider and period, line by line, with amount and token tolerances and the usage the bill forgot.
+
 Control API with Keycloak (docs/spec/01 §3.1): the `oidc` compose profile starts Keycloak 26 with a dev realm
 (roles `aigw-admin` / `aigw-operator` / `aigw-viewer`, client `aigw-portal`, users alice/bob/carol/dan, password = username).
 

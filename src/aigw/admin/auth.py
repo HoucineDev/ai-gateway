@@ -48,6 +48,7 @@ RESOURCES = (
     "audit",
     "config",
     "role_bindings",
+    "invoices",
 )
 ACTIONS = ("read", "write")
 ALL_SCOPES = tuple(f"{r}:{a}" for r in RESOURCES for a in ACTIONS)

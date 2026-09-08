@@ -27,7 +27,7 @@ Feature families from the proposal's reference inventory, with the phase in whic
 | Soft alerts (outbox) | P1 | delivery adapters (email/webhook) P2 |
 | Temporary budget increases with expiry | P1 | |
 | Validated allocation tags | P1 | `metadata` keys validated against project settings |
-| Provider invoice reconciliation | P2 | |
+| Provider invoice reconciliation | P2 ✓ | invoices + lines, CSV import, per-line/total deltas (docs/spec/04 §10, `tests/test_invoices.py`) |
 | Bounded regional/replica sub-allocations | P3 | |
 | Local GPU allocation vs provider charges (differentiator) | P2 | price rows with `source=internal-allocation` |
 

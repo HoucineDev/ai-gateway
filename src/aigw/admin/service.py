@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -32,6 +32,8 @@ def to_dict(obj: Any) -> dict[str, Any]:
         if isinstance(val, uuid.UUID):
             val = str(val)
         elif isinstance(val, datetime):
+            val = val.isoformat()
+        elif isinstance(val, date):
             val = val.isoformat()
         elif isinstance(val, Decimal):
             val = format(val, "f")

@@ -9,12 +9,13 @@ apply ``tenancy.visible(...)`` so a delegate only sees rows inside its tenants.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import case, func, select
 
+from aigw.admin import reconcile as R
 from aigw.admin import schemas as S
 from aigw.admin.auth import ROLE_RANK, Actor, require_admin, require_scope
 from aigw.admin.service import (
@@ -33,6 +34,8 @@ from aigw.db.models import (
     Budget,
     Deployment,
     DeploymentHealth,
+    Invoice,
+    InvoiceLine,
     Model,
     Organization,
     Price,
@@ -938,3 +941,162 @@ async def revoke_role_binding(
             rb.status, rb.revoked_at = "revoked", datetime.now(UTC)
         audit(s, actor, "role_binding.revoke", "role_binding", rb.id, before, to_dict(rb), rb.org_id)
         return to_dict(rb)
+
+
+# ---- provider invoices (docs/spec/04 §10) --------------------------------------
+# Provider bills span every tenant, so these routes are global: no delegated role includes `invoices:*`.
+
+
+def _invoice_view(inv: Invoice, lines: list[InvoiceLine] | None = None) -> dict:
+    d = to_dict(inv)
+    if lines is not None:
+        d["lines"] = [to_dict(line) for line in lines]
+    return d
+
+
+async def _store_invoice(s, actor: Actor, provider: str, period_start, period_end, currency, source, lines: list[dict]):
+    if period_end < period_start:
+        raise GatewayError(
+            ErrorType.invalid_request, "period_end before period_start", code="invalid_period", param="period_end"
+        )
+    inv = Invoice(
+        provider=provider,
+        period_start=period_start,
+        period_end=period_end,
+        currency=currency.upper(),
+        source=source,
+        created_by=actor.id,
+    )
+    s.add(inv)
+    await s.flush()
+    seen: set[tuple[str, object]] = set()
+    rows: list[InvoiceLine] = []
+    for ln in lines:
+        key = (ln["provider_model"], ln["day"])
+        if key in seen:
+            raise GatewayError(
+                ErrorType.invalid_request,
+                f"duplicate line for {ln['provider_model']} on {ln['day']}",
+                code="duplicate_line",
+                param="lines",
+            )
+        if not (period_start <= ln["day"] <= period_end):
+            raise GatewayError(
+                ErrorType.invalid_request,
+                f"line day {ln['day']} outside the invoice period",
+                code="line_outside_period",
+                param="lines",
+            )
+        seen.add(key)
+        rows.append(
+            InvoiceLine(
+                invoice_id=inv.id,
+                provider_model=ln["provider_model"],
+                day=ln["day"],
+                amount=ln["amount"],
+                prompt_tokens=ln.get("prompt_tokens"),
+                completion_tokens=ln.get("completion_tokens"),
+                meta=ln.get("meta") or {},
+            )
+        )
+    s.add_all(rows)
+    await s.flush()
+    audit(s, actor, "invoice.create", "invoice", inv.id, after={**to_dict(inv), "lines": len(rows)})
+    return inv, rows
+
+
+@router.post("/invoices", status_code=201)
+async def create_invoice(
+    body: S.InvoiceCreate, request: Request, actor: Actor = Depends(require_scope("invoices:write"))
+):
+    actor.require("invoices:write")
+    async with _db(request).tx() as s:
+        inv, rows = await _store_invoice(
+            s,
+            actor,
+            body.provider,
+            body.period_start,
+            body.period_end,
+            body.currency,
+            body.source,
+            [ln.model_dump() for ln in body.lines],
+        )
+        return _invoice_view(inv, rows)
+
+
+@router.post("/invoices/import", status_code=201)
+async def import_invoice_csv(
+    request: Request,
+    provider: str = Query(...),
+    period_start: date = Query(...),
+    period_end: date = Query(...),
+    currency: str = Query("USD", min_length=3, max_length=3),
+    source: str | None = None,
+    actor: Actor = Depends(require_scope("invoices:write")),
+):
+    """Body: CSV with columns provider_model, day, amount[, prompt_tokens, completion_tokens, …]."""
+    actor.require("invoices:write")
+    text = (await request.body()).decode("utf-8-sig", "replace")
+    try:
+        lines = R.parse_csv(text)
+    except ValueError as exc:
+        raise GatewayError(ErrorType.invalid_request, str(exc), code="invalid_csv") from None
+    async with _db(request).tx() as s:
+        inv, rows = await _store_invoice(s, actor, provider, period_start, period_end, currency, source, lines)
+        return _invoice_view(inv, rows)
+
+
+@router.get("/invoices")
+async def list_invoices(
+    request: Request,
+    provider: str | None = None,
+    status: str | None = None,
+    limit: int = Query(50, le=200),
+    actor: Actor = Depends(require_scope("invoices:read")),
+):
+    actor.require("invoices:read")
+    async with _db(request).session() as s:
+        q = select(Invoice).order_by(Invoice.period_start.desc(), Invoice.created_at.desc()).limit(limit)
+        if provider:
+            q = q.where(Invoice.provider == provider)
+        if status:
+            q = q.where(Invoice.status == status)
+        return {"data": [_invoice_view(i) for i in (await s.execute(q)).scalars()]}
+
+
+@router.get("/invoices/{invoice_id}")
+async def get_invoice(invoice_id: str, request: Request, actor: Actor = Depends(require_scope("invoices:read"))):
+    actor.require("invoices:read")
+    async with _db(request).session() as s:
+        inv = await get_or_404(s, Invoice, invoice_id, "invoice")
+        lines = list(
+            (
+                await s.execute(
+                    select(InvoiceLine)
+                    .where(InvoiceLine.invoice_id == inv.id)
+                    .order_by(InvoiceLine.day, InvoiceLine.provider_model)
+                )
+            ).scalars()
+        )
+        return _invoice_view(inv, lines)
+
+
+@router.post("/invoices/{invoice_id}/reconcile")
+async def reconcile_invoice(
+    invoice_id: str, body: S.ReconcileRequest, request: Request, actor: Actor = Depends(require_scope("invoices:write"))
+):
+    actor.require("invoices:write")
+    async with _db(request).tx() as s:
+        inv = await get_or_404(s, Invoice, invoice_id, "invoice")
+        before = to_dict(inv)
+        lines = list((await s.execute(select(InvoiceLine).where(InvoiceLine.invoice_id == inv.id))).scalars())
+        await R.reconcile(
+            s,
+            inv,
+            lines,
+            tolerance_pct=body.tolerance_pct,
+            tolerance_abs=body.tolerance_abs,
+            token_tolerance_pct=body.token_tolerance_pct,
+        )
+        audit(s, actor, "invoice.reconcile", "invoice", inv.id, before, to_dict(inv))
+        return _invoice_view(inv, lines)

@@ -105,6 +105,7 @@ Provider credentials are secret references on deployments (`env:NAME`), never st
 | Check whether a response came from cache | response header `X-AIGW-Cache` (`hit`/`miss`/`refresh`/`bypass`/`off`), body `aigw.cached`, Requests page status *cached* with cost 0; metric `aigw_cache_total` |
 | Force a fresh answer | send `X-AIGW-Cache: no-cache` (refreshes the entry) or `no-store` (leaves the cache untouched) |
 | Measure gateway overhead / capacity | `python scripts/loadtest.py --key <virtual key> --duration 60 --concurrency 64 --stream-ratio 0.8 --upstream http://localhost:9000 --json run.json`; compare *added* p95 between builds; `--steer slow` makes the mock answer in ~400 ms like a real model; thresholds (`--max-added-p95-ms`, `--max-error-rate`, `--min-rps`) exit 1 for CI |
+| Reconcile a provider bill | export the bill as CSV (`provider_model,day,amount,prompt_tokens,completion_tokens`), then `curl -X POST 'localhost:8081/admin/v1/invoices/import?provider=openai&period_start=2026-09-01&period_end=2026-09-30' -H 'x-admin-key: …' -H 'content-type: text/csv' --data-binary @bill.csv`, then `POST /admin/v1/invoices/{id}/reconcile {"tolerance_pct": 1}`; read `status`, `delta_amount`, `report.missing_in_invoice` and each line's `status`/`delta_amount` |
 | Explain a routing decision | `GET /admin/v1/requests/{request_id}` → `attempts[].routing`: `strategy`, `candidates`, `rejected` (reason per deployment) and `signals` (per-candidate `ttfb_ms`, `queue_waiting`, `inflight`, `weight`, `score`) |
 | Raise a budget temporarily | `POST /admin/v1/budgets/{id}/temporary-increase {"amount": "50", "until": "<RFC3339>"}` |
 | Add a price version | `POST /admin/v1/prices` (insert-only, versioned by `effective_from`) |
@@ -149,6 +150,8 @@ Provider credentials are secret references on deployments (`env:NAME`), never st
 | Load test shows 429 `rate_limited` / `budget_exceeded` | the key/project RPM/TPM or budget is the ceiling, not the gateway: raise them for the test key or read the errors as the intended admission behaviour |
 | Load test added p95 jumps between builds | run both builds with the same `--seed`, `--concurrency` and `--steer`; check Valkey health (rate-limit and cooldown round trips) and `AIGW_ROUTING_STRATEGY` before blaming code |
 | A price added seconds ago is not applied (cost 0 on the next requests) | prices are filtered by `effective_from <= now` using the application clock (the one that stamps them); a future `effective_from` is honoured literally — check the value, not the database clock |
+| Invoice line `unmatched` although traffic existed | the bill's `provider_model` must equal the deployment's `provider_model` (Azure: deployment name; Bedrock: model id); or the usage was cached (never billed) |
+| Invoice `mismatch` only on `ledger_total` > `invoice_total` | `report.ambiguous_attempts` > 0: ambiguous attempts settle at the reserved maximum by design; the provider bills actual usage |
 | 503 `no_eligible_deployment` with reason `saturated` | this replica has `max_concurrency` requests open on every eligible deployment; raise the cap, add deployments or gateway replicas |
 
 ## 7. Change log of operational behaviour
@@ -181,3 +184,5 @@ Provider credentials are secret references on deployments (`env:NAME`), never st
   baseline against the upstream, threshold gate; `tests/test_load.py` asserts ledger invariants under concurrency.
 - 2026-09-08 — price resolution compares `effective_from` with the application clock instead of Postgres `now()`
   (a clock skew between host and database container made a just-created price invisible for a moment).
+- 2026-09-08 — provider invoice reconciliation (docs/spec/04 §10): `invoices` / `invoice_lines` (migration),
+  JSON and CSV import, `…/reconcile` with amount and token tolerances, `invoices:*` global scopes.

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Literal
 
@@ -43,6 +43,30 @@ class RoleBindingCreate(BaseModel):
     role: Literal["org_owner", "team_owner", "project_member"]
     scope_type: Literal["organization", "team", "project"]
     scope_id: str
+
+
+class InvoiceLineIn(BaseModel):
+    provider_model: str = Field(min_length=1, max_length=200)
+    day: date
+    amount: Decimal
+    prompt_tokens: int | None = Field(default=None, ge=0)
+    completion_tokens: int | None = Field(default=None, ge=0)
+    meta: dict[str, Any] = {}
+
+
+class InvoiceCreate(BaseModel):
+    provider: Provider
+    period_start: date
+    period_end: date
+    currency: str = Field(default="USD", min_length=3, max_length=3)
+    source: str | None = None
+    lines: list[InvoiceLineIn] = Field(min_length=1)
+
+
+class ReconcileRequest(BaseModel):
+    tolerance_pct: Decimal = Field(default=Decimal("1"), ge=0, le=100)  # per-line and total amount tolerance
+    tolerance_abs: Decimal = Field(default=Decimal("0.01"), ge=0)  # absolute amount tolerance (ledger currency)
+    token_tolerance_pct: Decimal = Field(default=Decimal("2"), ge=0, le=100)
 
 
 class KeyCreate(BaseModel):

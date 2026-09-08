@@ -43,7 +43,7 @@ Settlement transaction (`settle`):
 3. Update attempt status/usage; insert `usage_events`; enqueue `outbox(topic=usage.settled)` for alerts and exporters.
 4. Soft alert: if `spent / limit >= soft_alert_pct` crossed in this transaction → `outbox(topic=budget.soft_alert)`.
 
-Reconciliation worker: attempts still `pending` after `AIGW_ATTEMPT_TIMEOUT_SECONDS` (default 900) are settled as `ambiguous` at `reserved`. Provider-invoice reconciliation is Phase 2.
+Reconciliation worker: attempts still `pending` after `AIGW_ATTEMPT_TIMEOUT_SECONDS` (default 900) are settled as `ambiguous` at `reserved`. Provider-invoice reconciliation: §10.
 
 Reservation before the first upstream byte means budget enforcement is strict under concurrency (two concurrent requests cannot both pass on the last unit of budget). Throughput ceiling of this design is the row lock on the shared org budget; the proposal's mitigation (bounded regional/replica sub-allocations) is a Phase 3 item and the schema (`budgets` per scope) already accommodates child allocations.
 
@@ -137,3 +137,24 @@ streaming clients get a hit replayed as role → content → finish (→ usage w
 Client control: request header `X-AIGW-Cache: no-store` (neither read nor write) or `no-cache` (skip the read,
 refresh the entry). Every response carries `X-AIGW-Cache: hit | miss | refresh | bypass | off` and a hit's body has
 `aigw.cached = true`. Metric `aigw_cache_total{result}`.
+
+## 10. Provider invoice reconciliation
+
+A provider bill is imported as an **invoice** (`provider`, `period_start`..`period_end`, `currency`, `source`) with
+**lines** per provider model and day: `amount`, optional `prompt_tokens` / `completion_tokens`, free-form `meta`
+(docs/spec/02). `POST /admin/v1/invoices` takes JSON; `POST /admin/v1/invoices/import?provider&period_start&period_end`
+takes the CSV most provider exports reduce to (`provider_model, day, amount[, prompt_tokens, completion_tokens, …]`).
+
+`POST /admin/v1/invoices/{id}/reconcile` aggregates the ledger for the same provider and period — `usage_events`
+joined to `request_attempts` for the provider model, statuses `succeeded` and `ambiguous` only (cached hits never
+reached the provider) — per (provider_model, day) and annotates every line: `matched`, `amount_mismatch` (outside
+`tolerance_pct` **and** `tolerance_abs`), `token_mismatch` (tokens outside `token_tolerance_pct`; skipped when the
+bill carries no tokens, e.g. Vertex SKUs) or `unmatched` (no ledger usage). Ledger usage the bill does not mention is
+listed as `report.missing_in_invoice`. The invoice gets `invoice_total`, `ledger_total`, `delta_amount`,
+`status` (`matched` | `mismatch`) and `report` (line counts, missing lines, count of ambiguous attempts settled at
+their reserved maximum, tolerances used). Runs are repeatable and audited. Invoices span tenants, so `invoices:*`
+scopes are global only (no delegated role carries them).
+
+Sources per provider: OpenAI and Anthropic usage/cost exports (model × day, tokens), Azure Cost Management export
+(deployment × day), Google Cloud Billing export (SKU × day, amounts only), AWS Cost and Usage Report (model id ×
+day). Local `openai_compat` deployments carry `internal-allocation` prices and are not reconciled.

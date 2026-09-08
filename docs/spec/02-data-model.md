@@ -61,6 +61,16 @@ deployment_health(deployment_id PK→deployments ON DELETE CASCADE, status ENUM(
 
 Written only by the worker's active health checks (docs/spec/04 §6); never part of the gateway snapshot.
 
+```
+invoices(id, provider, period_start DATE, period_end DATE, currency, source, status ENUM(open, matched, mismatch),
+         invoice_total NUMERIC(20,8) NULL, ledger_total NULL, delta_amount NULL, report JSONB, reconciled_at, created_by)
+invoice_lines(id, invoice_id→invoices ON DELETE CASCADE, provider_model, day DATE, prompt_tokens NULL, completion_tokens NULL,
+         amount NUMERIC(20,8), meta JSONB, status NULL, ledger_amount, ledger_prompt_tokens, ledger_completion_tokens,
+         ledger_requests, ledger_ambiguous, delta_amount)                        UNIQUE(invoice_id, provider_model, day)
+```
+
+Provider bills reconciled against settled usage (docs/spec/04 §10); never part of the gateway snapshot.
+
 ## Budgets and ledger
 
 ```
