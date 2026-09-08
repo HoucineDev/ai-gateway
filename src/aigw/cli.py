@@ -76,7 +76,9 @@ def price(provider: str, provider_model: str, input_per_million: str, output_per
     from aigw.bootstrap import add_price
 
     typer.echo(
-        asyncio.run(add_price(provider, provider_model, Decimal(input_per_million), Decimal(output_per_million), source))
+        asyncio.run(
+            add_price(provider, provider_model, Decimal(input_per_million), Decimal(output_per_million), source)
+        )
     )
 
 

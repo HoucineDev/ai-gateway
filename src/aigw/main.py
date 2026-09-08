@@ -122,9 +122,11 @@ def create_app(
 
         app.include_router(gateway_router)
     if settings.role in ("admin", "all"):
+        from aigw.admin.routes import public_router as admin_public_router
         from aigw.admin.routes import router as admin_router
 
         app.include_router(admin_router)
+        app.include_router(admin_public_router)
         if settings.cors_origins:
             from fastapi.middleware.cors import CORSMiddleware
 

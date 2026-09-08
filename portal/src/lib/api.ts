@@ -1,4 +1,6 @@
-/** Typed client for the control API (/admin/v1). Admin key lives in localStorage for the alpha; OIDC in Phase 2. */
+/** Typed client for the control API (/admin/v1). Credentials: Keycloak bearer token from lib/auth when signed in,
+ * otherwise the admin key from localStorage (docs/spec/01 §3.1). */
+import { auth, type OidcConfig } from "./auth";
 
 export type Org = { id: string; name: string; slug: string; status: string; created_at: string };
 export type Team = { id: string; org_id: string; name: string; status: string };
@@ -36,6 +38,8 @@ export type AuditEvent = {
   id: string; actor_type: string; actor_id: string; action: string; target_type: string; target_id: string | null;
   before: unknown; after: unknown; created_at: string;
 };
+export type Me = { actor_type: "admin_key" | "user"; actor_id: string; roles: string[]; scopes: string[] };
+export type AuthConfig = { admin_key: boolean; oidc: OidcConfig | null };
 export type Overview = {
   since: string; requests: number; cost: string; tokens: number; p95_latency_ms: number | null; failed: number;
   by_model: { model: string; requests: number; cost: string }[]; by_status: Record<string, number>;
@@ -57,23 +61,37 @@ export const settings = {
   set baseUrl(v: string) { localStorage.setItem(BASE, v); },
 };
 
-async function call<T>(method: string, path: string, body?: unknown, params?: Record<string, string | undefined>): Promise<T> {
+let oidcConfig: OidcConfig | null = null;
+/** Set by SessionProvider once GET /auth/config answers; needed for silent token refresh. */
+export const setOidcConfig = (c: OidcConfig | null) => { oidcConfig = c; };
+
+async function credentials(): Promise<Record<string, string>> {
+  const token = await auth.accessToken(oidcConfig);
+  if (token) return { authorization: `Bearer ${token}` };
+  return settings.adminKey ? { "x-admin-key": settings.adminKey } : {};
+}
+
+async function call<T>(method: string, path: string, body?: unknown, params?: Record<string, string | undefined>, unauthenticated = false): Promise<T> {
   const url = new URL(settings.baseUrl + "/admin/v1" + path, window.location.origin);
   for (const [k, v] of Object.entries(params ?? {})) if (v !== undefined && v !== "") url.searchParams.set(k, v);
+  const creds = unauthenticated ? {} : await credentials();
   const res = await fetch(url, {
     method,
-    headers: { "content-type": "application/json", "x-admin-key": settings.adminKey },
+    headers: { "content-type": "application/json", ...creds },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (!res.ok) {
     let err = { message: res.statusText, code: "http_" + res.status, param: undefined as string | undefined };
     try { err = (await res.json()).error ?? err; } catch { /* non-JSON */ }
+    if (res.status === 401 && "authorization" in creds) auth.clear(); // token rejected: drop the session, UI falls back to sign-in
     throw new ApiError(res.status, err.code, err.message, err.param);
   }
   return res.json() as Promise<T>;
 }
 
 export const api = {
+  authConfig: () => call<AuthConfig>("GET", "/auth/config", undefined, undefined, true),
+  me: () => call<Me>("GET", "/me"),
   overview: (hours = 24, org_id?: string) => call<Overview>("GET", "/overview", undefined, { hours: String(hours), org_id }),
   orgs: () => call<{ data: Org[] }>("GET", "/organizations"),
   createOrg: (b: { name: string; slug: string }) => call<Org>("POST", "/organizations", b),

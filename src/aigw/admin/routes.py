@@ -41,6 +41,23 @@ from aigw.gateway.auth import generate_key
 # (docs/spec/01 §3.1). tests/test_admin_oidc.py fails if a route is added without one.
 router = APIRouter(prefix="/admin/v1", dependencies=[Depends(require_admin)])
 
+# Unauthenticated discovery for the portal: which credentials this control plane accepts (docs/spec/01 §3.1).
+# Carries no secrets — issuer and client id are public parts of the OIDC authorization-code flow.
+public_router = APIRouter(prefix="/admin/v1")
+
+
+@public_router.get("/auth/config")
+async def auth_config(request: Request):
+    settings = request.app.state.settings
+    oidc = None
+    if settings.oidc_issuer:
+        oidc = {
+            "issuer": settings.oidc_issuer.rstrip("/"),
+            "client_id": settings.oidc_client_id or settings.oidc_audience,
+            "audience": settings.oidc_audience,
+        }
+    return {"admin_key": bool(settings.admin_key), "oidc": oidc}
+
 
 @router.get("/me")
 async def me(actor: Actor = Depends(require_admin)):

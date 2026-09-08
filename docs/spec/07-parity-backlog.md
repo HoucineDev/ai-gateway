@@ -101,5 +101,5 @@ Feature families from the proposal's reference inventory, with the phase in whic
 | Item | Phase |
 |------|-------|
 | Control API sufficient for a UI | P1 |
-| React admin portal (overview, management, governance, developer portal) | P2 |
+| React admin portal (overview, management, governance, developer portal) | P2 (Keycloak login + scope-aware UI ✓) |
 | Branding, custom docs, notification templates | P3 |

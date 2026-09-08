@@ -2,9 +2,11 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { api, fmtDate, fmtMoney, short } from "../lib/api";
+import { useSession } from "../lib/session";
 import { Badge, Empty, ErrorBanner, Field, Loading, Modal, Page, TableWrap } from "../components/ui";
 
 export default function Budgets() {
+  const { can } = useSession();
   const qc = useQueryClient();
   const budgets = useQuery({ queryKey: ["budgets"], queryFn: () => api.budgets({}), refetchInterval: 10_000 });
   const [open, setOpen] = useState(false);
@@ -22,7 +24,7 @@ export default function Budgets() {
   const toggle = useMutation({ mutationFn: ({ id, status }: { id: string; status: string }) => api.patchBudget(id, { status }), onSuccess: () => qc.invalidateQueries({ queryKey: ["budgets"] }) });
 
   return (
-    <Page title="Budgets" actions={<button className="btn btn-primary" onClick={() => setOpen(true)}><Plus size={16} aria-hidden="true" /> New budget</button>}>
+    <Page title="Budgets" actions={can("budgets:write") && <button className="btn btn-primary" onClick={() => setOpen(true)}><Plus size={16} aria-hidden="true" /> New budget</button>}>
       <p className="text-sm text-muted-foreground">Limits are enforced by transactional reservation before every upstream call: spend + reservations never exceed the limit, even under concurrency. Scope order: key → project → team → organization.</p>
       <ErrorBanner error={budgets.error ?? toggle.error} />
       {budgets.isPending && <Loading />}
@@ -47,8 +49,10 @@ export default function Budgets() {
                 <td className="text-xs text-muted-foreground">{b.temporary_until && new Date(b.temporary_until) > new Date() ? `+${fmtMoney(b.temporary_increase, 2)} until ${fmtDate(b.temporary_until)}` : "—"}</td>
                 <td><Badge value={b.status} /></td>
                 <td className="whitespace-nowrap text-right">
+                  {can("budgets:write") && <>
                   <button className="btn btn-ghost" onClick={() => setInc(b.id)}>Increase</button>
                   <button className="btn btn-ghost" onClick={() => toggle.mutate({ id: b.id, status: b.status === "active" ? "disabled" : "active" })}>{b.status === "active" ? "Disable" : "Enable"}</button>
+                  </>}
                 </td>
               </tr>
             );

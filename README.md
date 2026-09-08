@@ -39,10 +39,12 @@ curl -N localhost:8080/v1/chat/completions \
   -d '{"model":"local-chat","stream":true,"messages":[{"role":"user","content":"hello"}]}'
 
 curl localhost:8081/admin/v1/overview -H 'x-admin-key: change-me-admin'
-open http://localhost:8081            # portal — paste the admin key in Settings
+open http://localhost:8081            # portal — sign in with Keycloak (oidc profile) or paste the admin key in Settings
 ```
 
 Portal development: `cd portal && npm install && npm run dev` (proxies `/admin` to `localhost:8081`).
+
+Operations (ports, start/stop, checks, common tasks, troubleshooting): [`docs/runbook.md`](docs/runbook.md).
 
 Control API with Keycloak (docs/spec/01 §3.1): the `oidc` compose profile starts Keycloak 26 with a dev realm
 (roles `aigw-admin` / `aigw-operator` / `aigw-viewer`, client `aigw-portal`, users alice/bob/carol/dan, password = username).
@@ -53,6 +55,10 @@ python ../../scripts/oidc_smoke.py                # tokens for each user → /ad
 TOKEN=$(curl -s -d grant_type=password -d client_id=aigw-portal -d username=alice -d password=alice \n  localhost:8180/realms/aigw/protocol/openid-connect/token | jq -r .access_token)
 curl localhost:8081/admin/v1/me -H "authorization: Bearer $TOKEN"
 ```
+
+The portal signs in through the same realm (authorization code + PKCE, no library): open http://localhost:8081, click
+*Sign in with Keycloak*, log in as `carol` and the write actions disappear; `alice` gets them all. The portal reads the
+issuer and client id from `GET /admin/v1/auth/config`, so the build carries no environment-specific settings.
 
 Point a real deployment at your vLLM/KServe endpoint through the control API:
 

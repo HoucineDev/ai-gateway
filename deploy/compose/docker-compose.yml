@@ -16,6 +16,11 @@ services:
     build: { context: ../.., dockerfile: deploy/compose/Dockerfile }
     command: ["python", "-m", "aigw.testing.mock_upstream"]
     ports: ["9000:9000"]
+    healthcheck:  # image default probes :8080 (gateway/admin); the mock listens on :9000
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:9000/healthz').status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   migrate:
     build: { context: ../.., dockerfile: deploy/compose/Dockerfile }
@@ -51,6 +56,7 @@ services:
     build: { context: ../.., dockerfile: deploy/compose/Dockerfile }
     command: ["aigw", "worker"]
     environment: { <<: *env, AIGW_ROLE: worker }
+    healthcheck: { disable: true }  # no HTTP listener; liveness is the process
     depends_on: { migrate: { condition: service_completed_successfully } }
 
   keycloak:

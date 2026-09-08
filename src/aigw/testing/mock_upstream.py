@@ -189,6 +189,11 @@ async def embeddings(request: Request):
     }
 
 
+@mock.get("/healthz")
+async def healthz():
+    return {"status": "ok", "role": "mock-upstream"}
+
+
 @mock.get("/v1/models")
 async def models():
     return {"object": "list", "data": [{"id": "mock-model", "object": "model"}]}

@@ -2,6 +2,7 @@
 
 Self-hosted LLM gateway + management platform with **zero LiteLLM dependency**. Python 3.11+/FastAPI backend, React portal.
 Read `docs/spec/00-overview.md` first; the spec is the source of truth and code must follow it (cite section numbers in commits).
+Every change also updates `README.md` (if user-facing) and `docs/runbook.md` (operations, checks, troubleshooting, change log).
 
 ## Hard rules
 
@@ -41,7 +42,7 @@ Local dev env: `AIGW_DATABASE_URL`, `AIGW_VALKEY_URL`, `AIGW_ADMIN_KEY` (see `.e
 | `src/aigw/admin` | control API `/admin/v1`, `auth` (admin key / Keycloak OIDC → scopes, `require_scope`), `service` (audit, config bump) |
 | `src/aigw/worker` | outbox consumer, pending-attempt reconciliation, key expiry |
 | `src/aigw/db` | SQLAlchemy models, Alembic migrations (`src/aigw/migrations`) |
-| `portal/` | React 18 + Vite + Tailwind v4 + TanStack Query; tokens in `src/index.css`; API client `src/lib/api.ts` |
+| `portal/` | React 18 + Vite + Tailwind v4 + TanStack Query; tokens in `src/index.css`; API client `src/lib/api.ts`; Keycloak PKCE login `src/lib/auth.ts`, scopes via `src/lib/session.tsx` (`useSession().can`, `<Can>`) |
 | `deploy/` | Compose, Dockerfile (multi-stage: portal + python), Helm chart, ArgoCD example |
 | `.claude/skills/` | vendored `ui-ux-pro-max`, `design-system`, `ui-styling` — use for any portal/UI work |
 

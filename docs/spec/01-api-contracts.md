@@ -64,6 +64,7 @@ All write operations produce an append-only `audit_events` row with actor, actio
 | audit | `GET /audit?target_type&target_id&from&to` | |
 | config | `GET /config/version` | monotonically increasing version the gateway polls |
 | me | `GET /me` | caller identity: `actor_type`, `actor_id`, `roles`, effective `scopes` (any authenticated caller) |
+| auth | `GET /auth/config` | unauthenticated: `{admin_key: bool, oidc: {issuer, client_id, audience} | null}` for the portal's login flow |
 
 ### 3.1 Authentication and scopes
 
@@ -94,6 +95,10 @@ token, no mapped role) and `insufficient_scope`. Audit rows record `actor_type=u
 (falling back to `sub`). The Keycloak client must keep the `basic` client scope (Keycloak ≥ 24 emits `sub` through
 it) and the `roles` scope; `deploy/compose/keycloak/realm-aigw.json` is a reference realm. Delegated tenant-level roles (org owner, project member) are a separate Phase 2 item and will
 narrow these scopes by tenant; this section is global role-based access.
+
+Portal login: authorization-code flow with PKCE against the public client (`portal/src/lib/auth.ts`), tokens kept in
+`sessionStorage`, refreshed with the refresh token 30 s before expiry; the portal discovers issuer and client id from
+`GET /auth/config` and hides actions whose scope `GET /me` does not grant. The API, not the UI, is the enforcement point.
 
 Pagination: `?limit&cursor` (opaque). IDs are UUIDv7 strings. Timestamps are RFC 3339 UTC.
 

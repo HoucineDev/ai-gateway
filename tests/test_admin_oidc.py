@@ -404,6 +404,12 @@ async def test_api_operator_manages_catalog_but_not_tenancy(client, tenant):
         assert (r.status_code, r.json()["error"]["code"]) == (403, "insufficient_scope"), (method, path, r.text)
 
 
+async def test_api_auth_config_is_public(client):
+    r = await client.get("/admin/v1/auth/config")
+    assert r.status_code == 200
+    assert r.json() == {"admin_key": True, "oidc": {"issuer": ISSUER, "client_id": AUDIENCE, "audience": AUDIENCE}}
+
+
 async def test_api_token_errors_map_to_envelope(client):
     r = await client.get("/admin/v1/organizations", headers=bearer(mint([])))
     assert (r.status_code, r.json()["error"]["code"]) == (403, "missing_role")
@@ -427,6 +433,7 @@ async def test_api_bearer_refused_when_oidc_not_configured(db, valkey):
     async with app.router.lifespan_context(app):
         assert app.state.oidc is None
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://gw") as c:
+            assert (await c.get("/admin/v1/auth/config")).json() == {"admin_key": True, "oidc": None}
             r = await c.get("/admin/v1/organizations", headers=bearer(mint(["aigw-admin"])))
             assert (r.status_code, r.json()["error"]["code"]) == (401, "oidc_not_configured")
             r = await c.get("/admin/v1/organizations", headers=ADMIN)

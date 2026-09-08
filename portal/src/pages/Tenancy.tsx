@@ -2,10 +2,12 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, KeyRound, RotateCw, Ban } from "lucide-react";
 import { api, fmtDate, type Org, type Team, type Project } from "../lib/api";
+import { useSession } from "../lib/session";
 import { Badge, CopyOnce, Empty, ErrorBanner, Field, Loading, Modal, Page, TableWrap } from "../components/ui";
 
 /** Org → team → project → keys drill-down. Every write is audited server-side. */
 export default function Tenancy() {
+  const { can } = useSession();
   const qc = useQueryClient();
   const orgs = useQuery({ queryKey: ["orgs"], queryFn: api.orgs });
   const [org, setOrg] = useState<Org | null>(null);
@@ -45,7 +47,7 @@ export default function Tenancy() {
       {secret && <CopyOnce secret={secret} />}
       <div className="grid gap-4 lg:grid-cols-3">
         <section className={col} aria-label="Organizations">
-          <Header title="Organizations" onAdd={() => setDialog("org")} />
+          <Header title="Organizations" onAdd={can("organizations:write") ? () => setDialog("org") : undefined} />
           {orgs.isPending && <Loading />}
           {orgs.data?.data.length === 0 && <Empty>No organizations</Empty>}
           <ul>{orgs.data?.data.map((o) => (
@@ -55,7 +57,7 @@ export default function Tenancy() {
           ))}</ul>
         </section>
         <section className={col} aria-label="Teams">
-          <Header title={org ? `Teams · ${org.name}` : "Teams"} onAdd={org ? () => setDialog("team") : undefined} />
+          <Header title={org ? `Teams · ${org.name}` : "Teams"} onAdd={org && can("teams:write") ? () => setDialog("team") : undefined} />
           {!org && <Empty>Select an organization</Empty>}
           {org && teams.data?.data.length === 0 && <Empty>No teams</Empty>}
           <ul>{teams.data?.data.map((t) => (
@@ -64,7 +66,7 @@ export default function Tenancy() {
           ))}</ul>
         </section>
         <section className={col} aria-label="Projects">
-          <Header title={team ? `Projects · ${team.name}` : "Projects"} onAdd={team ? () => setDialog("project") : undefined} />
+          <Header title={team ? `Projects · ${team.name}` : "Projects"} onAdd={team && can("projects:write") ? () => setDialog("project") : undefined} />
           {!team && <Empty>Select a team</Empty>}
           {team && projects.data?.data.length === 0 && <Empty>No projects</Empty>}
           <ul>{projects.data?.data.map((p) => (
@@ -77,7 +79,7 @@ export default function Tenancy() {
       <section aria-label="Virtual keys">
         <div className="mb-2 flex items-center justify-between">
           <h2 className="text-base font-semibold">{project ? `Keys · ${project.name}` : "Keys"}</h2>
-          {project && <button className="btn btn-primary" onClick={() => setDialog("key")}><KeyRound size={16} aria-hidden="true" /> Issue key</button>}
+          {project && can("keys:write") && <button className="btn btn-primary" onClick={() => setDialog("key")}><KeyRound size={16} aria-hidden="true" /> Issue key</button>}
         </div>
         {!project && <Empty>Select a project to manage its keys and budget</Empty>}
         {project && keys.data && (
@@ -92,7 +94,7 @@ export default function Tenancy() {
                   <td className="text-xs text-muted-foreground">{k.allowed_models ? k.allowed_models.join(", ") : "all visible"}</td>
                   <td className="text-xs text-muted-foreground">{fmtDate(k.created_at)}</td><td className="text-xs text-muted-foreground">{fmtDate(k.grace_until)}</td>
                   <td className="whitespace-nowrap text-right">
-                    {k.status === "active" && <>
+                    {k.status === "active" && can("keys:write") && <>
                       <button className="btn btn-ghost" aria-label={`Rotate key ${k.name}`} onClick={() => rotate.mutate(k.id)}><RotateCw size={16} /></button>
                       <button className="btn btn-ghost text-destructive" aria-label={`Revoke key ${k.name}`} onClick={() => { if (confirm(`Revoke key "${k.name}"? Clients using it will get 401 within seconds.`)) revoke.mutate(k.id); }}><Ban size={16} /></button>
                     </>}

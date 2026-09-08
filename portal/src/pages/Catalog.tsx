@@ -2,9 +2,11 @@ import { useState, type ChangeEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Snowflake, Power } from "lucide-react";
 import { ApiError, api, type Model } from "../lib/api";
+import { useSession } from "../lib/session";
 import { Badge, Empty, ErrorBanner, Field, Loading, Modal, Page, TableWrap } from "../components/ui";
 
 export default function Catalog() {
+  const { can } = useSession();
   const qc = useQueryClient();
   const models = useQuery({ queryKey: ["models"], queryFn: () => api.models() });
   const prices = useQuery({ queryKey: ["prices"], queryFn: api.prices });
@@ -18,8 +20,8 @@ export default function Catalog() {
 
   return (
     <Page title="Models & deployments" actions={<>
-      <button className="btn btn-secondary" onClick={() => setNewPrice(true)}>Add price</button>
-      <button className="btn btn-primary" onClick={() => setNewModel(true)}><Plus size={16} aria-hidden="true" /> Register model</button>
+      {can("prices:write") && <button className="btn btn-secondary" onClick={() => setNewPrice(true)}>Add price</button>}
+      {can("models:write") && <button className="btn btn-primary" onClick={() => setNewModel(true)}><Plus size={16} aria-hidden="true" /> Register model</button>}
     </>}>
       <ErrorBanner error={models.error ?? cooldown.error ?? toggle.error} />
       {models.isPending && <Loading />}
@@ -32,7 +34,7 @@ export default function Catalog() {
             <Badge value={m.status} />
             <span className="text-xs text-muted-foreground">{m.org_id ? "org-scoped" : "global"} · {m.modalities.join(", ")}
               {m.context_window ? ` · ${m.context_window.toLocaleString()} ctx` : ""}{m.supports_tools ? " · tools" : ""}{m.supports_json_schema ? " · json_schema" : ""}{m.supports_vision ? " · vision" : ""}</span>
-            <button className="btn btn-secondary ml-auto" onClick={() => setNewDep(m)}><Plus size={16} aria-hidden="true" /> Deployment</button>
+            {can("deployments:write") && <button className="btn btn-secondary ml-auto" onClick={() => setNewDep(m)}><Plus size={16} aria-hidden="true" /> Deployment</button>}
           </div>
           {m.deployments.length === 0 ? <p className="text-sm text-muted-foreground">No deployments — requests to this model will get 503.</p> : (
             <div className="overflow-x-auto">
@@ -52,10 +54,12 @@ export default function Catalog() {
                         <td><Badge value={d.status} /></td>
                         <td className="text-xs text-muted-foreground">{cooling ? `until ${new Date(d.cooldown_until!).toLocaleTimeString()}` : "—"}</td>
                         <td className="whitespace-nowrap text-right">
+                          {can("deployments:write") && <>
                           <button className="btn btn-ghost" aria-label={cooling ? `Clear cooldown for ${d.name}` : `Cool down ${d.name} for 10 minutes`}
                             onClick={() => cooldown.mutate({ id: d.id, seconds: cooling ? 0 : 600 })}><Snowflake size={16} /></button>
                           <button className="btn btn-ghost" aria-label={`${d.status === "active" ? "Disable" : "Enable"} ${d.name}`}
                             onClick={() => toggle.mutate({ id: d.id, status: d.status === "active" ? "disabled" : "active" })}><Power size={16} /></button>
+                          </>}
                         </td>
                       </tr>
                     );
