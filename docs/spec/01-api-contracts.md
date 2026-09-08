@@ -63,7 +63,7 @@ All write operations produce an append-only `audit_events` row with actor, actio
 | requests | `GET /requests/{request_id}` | attempts, routing decision, usage — the developer diagnostics view |
 | audit | `GET /audit?target_type&target_id&from&to` | |
 | config | `GET /config/version` | monotonically increasing version the gateway polls |
-| me | `GET /me` | caller identity: `actor_type`, `actor_id`, `roles`, effective `scopes` (any authenticated caller) |
+| me | `GET /me` | caller identity: `actor_type`, `actor_id`, `roles`, effective `scopes`, `global_scopes` (unrestricted by tenant), delegated `grants` |
 | auth | `GET /auth/config` | unauthenticated: `{admin_key: bool, oidc: {issuer, client_id, audience} | null}` for the portal's login flow |
 | role-bindings | `POST /role-bindings`, `GET /role-bindings?subject&org_id&scope_type&scope_id`, `POST /role-bindings/{id}/revoke` | delegated tenant roles (§3.2) |
 

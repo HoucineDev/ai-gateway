@@ -310,6 +310,7 @@ async def test_api_admin_key_and_bearer_coexist(client):
         "actor_id": "admin",
         "roles": [],
         "scopes": list(ALL_SCOPES),
+        "global_scopes": list(ALL_SCOPES),
         "grants": [],
     }
     r = await client.get("/admin/v1/me", headers=bearer(mint(["aigw-viewer"])))

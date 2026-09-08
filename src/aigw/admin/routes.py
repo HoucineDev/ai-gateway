@@ -75,6 +75,7 @@ async def me(actor: Actor = Depends(require_admin)):
         "actor_id": actor.id,
         "roles": sorted(actor.roles),
         "scopes": actor.effective_scopes(),
+        "global_scopes": [s for s in actor.effective_scopes() if actor.unrestricted(s)],
         "grants": [
             {
                 "role": g.role,

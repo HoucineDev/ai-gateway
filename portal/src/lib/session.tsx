@@ -13,7 +13,8 @@ type Session = {
   me: Me | null | undefined; // undefined = loading, null = not signed in / rejected
   error: unknown;
   signedIn: boolean; // OIDC session present in this tab
-  can: (scope: string) => boolean;
+  can: (scope: string) => boolean; // held globally or through some delegated grant
+  canGlobal: (scope: string) => boolean; // held without tenant restriction (create organizations, global models, prices)
   login: (returnTo?: string) => Promise<void>;
   logout: () => Promise<void>;
 };
@@ -36,6 +37,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const me = useQuery({ queryKey: ["me", signedIn, settings.adminKey], queryFn: api.me, enabled: hasCredential, retry: false });
 
   const can = useCallback((scope: string) => Boolean(me.data?.scopes.includes(scope)), [me.data]);
+  const canGlobal = useCallback((scope: string) => Boolean(me.data?.global_scopes.includes(scope)), [me.data]);
   const login = useCallback(async (returnTo?: string) => {
     if (!config.data?.oidc) throw new Error("Single sign-on is not configured on this control plane");
     await auth.login(config.data.oidc, returnTo);
@@ -48,6 +50,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     error: me.error ?? config.error,
     signedIn,
     can,
+    canGlobal,
     login,
     logout,
   };

@@ -292,6 +292,7 @@ async def test_project_member_scope(client, world):
     h = tok("dan")
     org1, team1, project1 = world["org"], world["team"], world["project"]
     me = (await client.get("/admin/v1/me", headers=h)).json()
+    assert me["global_scopes"] == [] and "keys:write" in me["scopes"]
     assert me["grants"] == [
         {
             "role": "project_member",

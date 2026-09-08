@@ -39,7 +39,7 @@ export type AuditEvent = {
   before: unknown; after: unknown; created_at: string;
 };
 export type Grant = { role: string; scope_type: string; scope_id: string; org_id: string; team_id: string | null; project_id: string | null };
-export type Me = { actor_type: "admin_key" | "user"; actor_id: string; roles: string[]; scopes: string[]; grants: Grant[] };
+export type Me = { actor_type: "admin_key" | "user"; actor_id: string; roles: string[]; scopes: string[]; global_scopes: string[]; grants: Grant[] };
 export type RoleBinding = {
   id: string; subject: string; subject_kind: string; role: "org_owner" | "team_owner" | "project_member";
   scope_type: "organization" | "team" | "project"; scope_id: string; org_id: string; team_id: string | null; project_id: string | null;

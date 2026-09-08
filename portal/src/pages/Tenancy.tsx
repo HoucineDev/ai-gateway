@@ -7,7 +7,7 @@ import { Badge, CopyOnce, Empty, ErrorBanner, Field, Loading, Modal, Page, Table
 
 /** Org → team → project → keys drill-down. Every write is audited server-side. */
 export default function Tenancy() {
-  const { can } = useSession();
+  const { can, canGlobal } = useSession();
   const qc = useQueryClient();
   const orgs = useQuery({ queryKey: ["orgs"], queryFn: api.orgs });
   const [org, setOrg] = useState<Org | null>(null);
@@ -47,7 +47,7 @@ export default function Tenancy() {
       {secret && <CopyOnce secret={secret} />}
       <div className="grid gap-4 lg:grid-cols-3">
         <section className={col} aria-label="Organizations">
-          <Header title="Organizations" onAdd={can("organizations:write") ? () => setDialog("org") : undefined} />
+          <Header title="Organizations" onAdd={canGlobal("organizations:write") ? () => setDialog("org") : undefined} />
           {orgs.isPending && <Loading />}
           {orgs.data?.data.length === 0 && <Empty>No organizations</Empty>}
           <ul>{orgs.data?.data.map((o) => (

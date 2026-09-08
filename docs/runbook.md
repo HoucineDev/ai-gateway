@@ -130,3 +130,5 @@ Provider credentials are secret references on deployments (`env:NAME`), never st
 - 2026-09-08 — delegated tenant roles: `role_bindings` table (migration `f1eac2b1733d`, run `aigw migrate`),
   `POST/GET /admin/v1/role-bindings`, `…/revoke`; every route checks the target tenant, lists are filtered;
   portal *Members* panel; new error codes `tenant_forbidden`, `rank_exceeded`, `role_scope_mismatch`.
+- 2026-09-08 — `GET /me` gains `global_scopes`; the portal hides global-only actions (new organization, global
+  model, price, deployments on global models) from delegates.
