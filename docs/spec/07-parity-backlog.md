@@ -10,7 +10,7 @@ Feature families from the proposal's reference inventory, with the phase in whic
 | Organizations / teams / projects hierarchy | P1 | |
 | Key `allowed_models`, per-key RPM/TPM | P1 | |
 | Key revocation with invalidation | P1 | Valkey pub/sub + snapshot refresh |
-| Key rotation with grace period | P1 (API) / P3 (scheduled) | |
+| Key rotation with grace period | P1 (API) / P3 ✓ (scheduled) | `rotate_every_seconds`, worker rotation, one-time sealed pickup (docs/spec/01 §3.2, `tests/test_rotation.py`) |
 | Admin key auth | P1 | |
 | Keycloak OIDC JWT on control API | P2 ✓ | JWKS validation, roles claim → scopes (docs/spec/01 §3.1, `tests/test_admin_oidc.py`) |
 | Delegated roles (org owner, team owner, project member, service account) | P2 ✓ | `role_bindings`, tenant-scoped `actor.require` (docs/spec/01 §3.2, `tests/test_admin_delegation.py`) |

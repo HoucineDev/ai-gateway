@@ -17,6 +17,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     Numeric,
     SmallInteger,
     String,
@@ -122,10 +123,23 @@ class VirtualKey(Base):
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict)
     rotated_from: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("virtual_keys.id"))
     grace_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # scheduled rotation (docs/spec/01 §3.2): the worker rotates `rotate_every_seconds` after creation
+    rotate_every_seconds: Mapped[int | None] = mapped_column(Integer)
+    rotation_grace_seconds: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = _created()
 
 
 # ---- catalog ---------------------------------------------------------------
+
+
+class KeyPickup(Base):
+    """Plaintext of a scheduled-rotation key, encrypted with AIGW_KEY_PICKUP_SECRET, retrievable once."""
+
+    __tablename__ = "key_pickups"
+    key_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("virtual_keys.id", ondelete="CASCADE"), primary_key=True)
+    ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = _created()
 
 
 class Model(Base):

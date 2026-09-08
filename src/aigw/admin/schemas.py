@@ -76,6 +76,16 @@ class KeyCreate(BaseModel):
     rpm_limit: int | None = Field(default=None, ge=1)
     tpm_limit: int | None = Field(default=None, ge=1)
     metadata: dict[str, Any] = {}
+    rotate_every_seconds: int | None = Field(default=None, ge=3600, le=365 * 86400)
+    rotation_grace_seconds: int | None = Field(default=None, ge=0, le=7 * 86400)
+
+
+class KeyPatch(BaseModel):
+    """Rotation schedule only; everything else about a key is immutable (rotate instead)."""
+
+    rotate_every_seconds: int | None = Field(default=None, ge=3600, le=365 * 86400)
+    rotation_grace_seconds: int | None = Field(default=None, ge=0, le=7 * 86400)
+    clear_schedule: bool = False
 
 
 class KeyRotate(BaseModel):

@@ -59,7 +59,7 @@ All write operations produce an append-only `audit_events` row with actor, actio
 | organizations | `POST/GET /organizations`, `GET/PATCH /organizations/{id}` | |
 | teams | `POST /organizations/{org}/teams`, `GET/PATCH /teams/{id}` | |
 | projects | `POST /teams/{team}/projects`, `GET/PATCH /projects/{id}` | |
-| keys | `POST /projects/{project}/keys` → returns plaintext once; `GET /keys/{id}`; `POST /keys/{id}/revoke`; `POST /keys/{id}/rotate` (grace period) | stored as SHA-256 hash + prefix |
+| keys | `POST /projects/{project}/keys` → returns plaintext once; `GET /keys/{id}`; `PATCH /keys/{id}` (rotation schedule); `POST /keys/{id}/revoke`; `POST /keys/{id}/rotate` (grace period); `POST /keys/{id}/pickup` (plaintext of a scheduled rotation, once) | stored as SHA-256 hash + prefix; §3.2 scheduled rotation |
 | models | `POST/GET /models`, `PATCH /models/{id}` | logical models; `org_id` null = global; each deployment carries its latest active-probe `health` (docs/spec/04 §6) |
 | deployments | `POST /models/{model}/deployments`, `PATCH /deployments/{id}`, `POST /deployments/{id}/cooldown` | credential is a secret reference (`env:NAME` in alpha, `openbao:path#key` later) |
 | prices | `POST/GET /prices` | insert-only, versioned by `effective_from` |
@@ -104,7 +104,19 @@ token, no mapped role) and `insufficient_scope`. Audit rows record `actor_type=u
 it) and the `roles` scope; `deploy/compose/keycloak/realm-aigw.json` is a reference realm. Delegated tenant-level roles (org owner, project member) are a separate Phase 2 item and will
 narrow these scopes by tenant; this section is global role-based access.
 
-### 3.2 Delegated roles (tenant-scoped)
+### 3.2 Scheduled key rotation
+
+A key created or patched with `rotate_every_seconds` (≥ 1 h) and `rotation_grace_seconds` (default 3600) is rotated
+by the worker once the interval has elapsed since its creation: a new key with the same scope, limits, metadata and
+schedule is issued, the previous key stays valid for the grace period (`grace_until`), the config version is bumped
+and an audit event `key.rotate.scheduled` (actor `worker`) plus an outbox event `key.rotated` are written. Because
+no operator is present to copy the plaintext, it is sealed with `AIGW_KEY_PICKUP_SECRET` (Fernet) into `key_pickups`
+for `AIGW_KEY_PICKUP_TTL_SECONDS` (default 24 h); `POST /keys/{id}/pickup` returns it exactly once (audited
+`key.pickup`) and deletes it, and `GET /keys/{id}` shows `pickup_available` / `pickup_expires_at` / `next_rotation_at`.
+Without the secret the worker skips due keys with a warning instead of rotating keys nobody can retrieve. Manual
+`POST /keys/{id}/rotate` keeps working and carries the schedule over to the new key.
+
+### 3.3 Delegated roles (tenant-scoped)
 
 Global roles (§3.1) grant scopes everywhere. A **role binding** grants a role to a subject inside one tenant:
 

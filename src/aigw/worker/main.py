@@ -13,6 +13,7 @@ from aigw.config import Settings, get_settings
 from aigw.db.models import ConfigVersion, Outbox, VirtualKey
 from aigw.db.session import Database
 from aigw.gateway.accounting import Ledger
+from aigw.worker.rotation import rotate_due_keys
 
 log = logging.getLogger("aigw.worker")
 
@@ -24,7 +25,11 @@ class Worker:
         self.ledger = Ledger(db)
         self.health = health  # HealthChecker (docs/spec/04 §6) or None when disabled
         self._health_last = float("-inf")
-        self.handlers = {"budget.soft_alert": self.on_soft_alert, "usage.settled": self.on_usage_settled}
+        self.handlers = {
+            "budget.soft_alert": self.on_soft_alert,
+            "usage.settled": self.on_usage_settled,
+            "key.rotated": self.on_key_rotated,
+        }
 
     async def run_forever(self, interval: float = 5.0) -> None:
         log.info("worker started")
@@ -39,10 +44,17 @@ class Worker:
         processed = await self.process_outbox()
         reconciled = await self.ledger.reconcile_pending(self.settings.attempt_timeout_seconds)
         expired = await self.expire_keys()
-        if reconciled or expired:
-            log.info("reconciled=%d expired_keys=%d", reconciled, expired)
+        rotated = await rotate_due_keys(self.db, self.settings)
+        if reconciled or expired or rotated:
+            log.info("reconciled=%d expired_keys=%d rotated_keys=%d", reconciled, expired, rotated)
         probed = await self.maybe_check_health()
-        return {"outbox": processed, "reconciled": reconciled, "expired_keys": expired, "health_probed": probed}
+        return {
+            "outbox": processed,
+            "reconciled": reconciled,
+            "expired_keys": expired,
+            "rotated_keys": rotated,
+            "health_probed": probed,
+        }
 
     async def maybe_check_health(self) -> int:
         interval = float(self.settings.health_check_interval_seconds)
@@ -105,6 +117,16 @@ class Worker:
             payload.get("spent"),
             payload.get("limit"),
             payload.get("pct"),
+        )
+
+    async def on_key_rotated(self, payload: dict) -> None:
+        log.warning(
+            "KEY ROTATED by schedule: %s (%s) -> %s; previous valid until %s; pick up the new plaintext before %s",
+            payload.get("old_key_id"),
+            payload.get("name"),
+            payload.get("new_key_id"),
+            payload.get("grace_until"),
+            payload.get("pickup_expires_at"),
         )
 
     async def on_usage_settled(self, payload: dict) -> None:

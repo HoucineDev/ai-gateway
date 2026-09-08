@@ -93,6 +93,7 @@ Provider credentials are secret references on deployments (`env:NAME`), never st
 | Task | How |
 |------|-----|
 | Revoke a key immediately | portal → Organizations & keys → revoke, or `POST /admin/v1/keys/{id}/revoke`; lands on gateways within ~1 s via Valkey, worst case one refresh interval |
+| Schedule key rotation | `PATCH /admin/v1/keys/{id} {"rotate_every_seconds": 2592000, "rotation_grace_seconds": 3600}`; set `AIGW_KEY_PICKUP_SECRET` on the worker and admin roles (same value; generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`); after the worker rotates, `POST /admin/v1/keys/{new_id}/pickup` once within 24 h to get the plaintext (`GET /keys/{id}` shows `pickup_available`); worker logs `KEY ROTATED by schedule` |
 | Rotate a key with grace | `POST /admin/v1/keys/{id}/rotate {"grace_seconds": 3600}` |
 | Add an Azure OpenAI deployment | `POST /admin/v1/models/{model}/deployments {"provider": "azure_openai", "provider_model": "<azure deployment name>", "base_url": "https://<resource>.openai.azure.com", "credential_ref": "env:AZURE_OPENAI_KEY", "capabilities": {"api_version": "2024-10-21"}}`; add a price row for `(azure_openai, <deployment name>)`; Entra auth: `"capabilities": {"auth": "bearer"}` with a token in the credential ref |
 | Add a Gemini deployment (Vertex AI) | `POST /admin/v1/models/{model}/deployments {"provider": "gemini", "provider_model": "gemini-2.5-pro", "credential_ref": "env:GOOGLE_SA_JSON", "capabilities": {"project": "<gcp project>", "location": "europe-west1", "auth": "service_account"}}` (credential = service-account key JSON; or `auth: bearer` with a ready access token); Google AI Studio: `"capabilities": {"api": "google_ai"}` with the API key as credential; price row `(gemini, gemini-2.5-pro)` |
@@ -157,6 +158,9 @@ Provider credentials are secret references on deployments (`env:NAME`), never st
 | 400 `guardrail_blocked` | a detector in the project's policy matched (message names detector and categories) or a `fail: closed` detector failed (`detail.error` in the event: `timeout`, HTTP status); raise `timeout_ms`, fix the sidecar, or set `fail: open` to degrade to logging |
 | 503 `guardrail_config_invalid` | the project's `settings.guardrails` does not parse (unknown detector, bad regex, missing `url`); the project fails closed until fixed |
 | Streamed answer ends with a `guardrail_blocked` error event | `post_stream: tail`: the client already received the content; switch the project to `post_stream: buffer` for hard blocking at the cost of no first byte until the answer completes |
+| Worker logs `due for rotation but AIGW_KEY_PICKUP_SECRET is not set` | set the secret on worker and admin, or clear the schedule (`PATCH /keys/{id} {"clear_schedule": true}`) |
+| 404 `pickup_not_available` | already picked up, expired (`AIGW_KEY_PICKUP_TTL_SECONDS`), or the key was rotated manually (manual rotation returns the plaintext in the response instead) |
+| 503 `pickup_undecryptable` | `AIGW_KEY_PICKUP_SECRET` differs between the worker that sealed it and the admin role reading it |
 | 503 `no_eligible_deployment` with reason `saturated` | this replica has `max_concurrency` requests open on every eligible deployment; raise the cap, add deployments or gateway replicas |
 
 ## 7. Change log of operational behaviour
@@ -194,3 +198,6 @@ Provider credentials are secret references on deployments (`env:NAME`), never st
 - 2026-09-08 — guardrail pipeline (docs/spec/04 §11): per-project pre/post rules, `pii` / `regex` / `keyword` /
   `http` detectors, block/redact/flag, fail-open/closed, tail or buffered streams, `guardrail_events` (migration),
   `GET /admin/v1/guardrail-events`, `aigw_guardrail_total`.
+- 2026-09-08 — scheduled key rotation (docs/spec/01 §3.2): `rotate_every_seconds` / `rotation_grace_seconds`,
+  worker rotation with sealed one-time pickup (`key_pickups`, `AIGW_KEY_PICKUP_SECRET`), `PATCH /keys/{id}`,
+  `POST /keys/{id}/pickup`, outbox `key.rotated`.

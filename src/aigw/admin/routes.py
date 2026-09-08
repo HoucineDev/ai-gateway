@@ -37,6 +37,7 @@ from aigw.db.models import (
     GuardrailEvent,
     Invoice,
     InvoiceLine,
+    KeyPickup,
     Model,
     Organization,
     Price,
@@ -48,6 +49,7 @@ from aigw.db.models import (
     VirtualKey,
 )
 from aigw.gateway.auth import generate_key
+from aigw.worker.rotation import decrypt_pickup
 
 # require_admin at router level is the fail-closed backstop; each route declares its scope with require_scope
 # (docs/spec/01 §3.1). tests/test_admin_oidc.py fails if a route is added without one.
@@ -298,6 +300,8 @@ async def create_key(
             rpm_limit=body.rpm_limit,
             tpm_limit=body.tpm_limit,
             metadata_=body.metadata,
+            rotate_every_seconds=body.rotate_every_seconds,
+            rotation_grace_seconds=body.rotation_grace_seconds,
         )
         s.add(k)
         await s.flush()
@@ -315,12 +319,66 @@ async def list_keys(project_id: str, request: Request, actor: Actor = Depends(re
         return {"data": [to_dict(k) for k in (await s.execute(q)).scalars()]}
 
 
+def _key_view(k: VirtualKey, pickup: KeyPickup | None = None) -> dict:
+    d = to_dict(k)
+    nxt = (
+        (k.created_at + timedelta(seconds=int(k.rotate_every_seconds)))
+        if k.status == "active" and k.rotate_every_seconds
+        else None
+    )
+    d["next_rotation_at"] = nxt.isoformat() if nxt else None
+    d["pickup_available"] = bool(pickup and pickup.expires_at > datetime.now(UTC))
+    d["pickup_expires_at"] = pickup.expires_at.isoformat() if pickup else None
+    return d
+
+
 @router.get("/keys/{key_id}")
 async def get_key(key_id: str, request: Request, actor: Actor = Depends(require_scope("keys:read"))):
     async with _db(request).session() as s:
         k = await get_or_404(s, VirtualKey, key_id, "key")
         actor.require("keys:read", **_key_ids(k))
-        return to_dict(k)
+        return _key_view(k, await s.get(KeyPickup, k.id))
+
+
+@router.patch("/keys/{key_id}")
+async def patch_key(
+    key_id: str, body: S.KeyPatch, request: Request, actor: Actor = Depends(require_scope("keys:write"))
+):
+    """Set or clear the rotation schedule (docs/spec/01 §3.2)."""
+    async with _db(request).tx() as s:
+        k = await get_or_404(s, VirtualKey, key_id, "key")
+        actor.require("keys:write", **_key_ids(k))
+        before = to_dict(k)
+        if body.clear_schedule:
+            k.rotate_every_seconds = None
+            k.rotation_grace_seconds = None
+        if body.rotate_every_seconds is not None:
+            k.rotate_every_seconds = body.rotate_every_seconds
+        if body.rotation_grace_seconds is not None:
+            k.rotation_grace_seconds = body.rotation_grace_seconds
+        audit(s, actor, "key.update", "key", k.id, before, to_dict(k), k.org_id)
+        return _key_view(k, await s.get(KeyPickup, k.id))
+
+
+@router.post("/keys/{key_id}/pickup")
+async def pickup_key(key_id: str, request: Request, actor: Actor = Depends(require_scope("keys:write"))):
+    """Return the plaintext of a key rotated by the schedule — exactly once, audited."""
+    async with _db(request).tx() as s:
+        k = await get_or_404(s, VirtualKey, key_id, "key")
+        actor.require("keys:write", **_key_ids(k))
+        pickup = await s.get(KeyPickup, k.id)
+        if pickup is None or pickup.expires_at <= datetime.now(UTC):
+            raise GatewayError(ErrorType.not_found, "no pending pickup for this key", code="pickup_not_available")
+        plaintext = decrypt_pickup(request.app.state.settings.key_pickup_secret, pickup.ciphertext)
+        if plaintext is None:
+            raise GatewayError(
+                ErrorType.unavailable,
+                "pickup cannot be decrypted (AIGW_KEY_PICKUP_SECRET missing or changed)",
+                code="pickup_undecryptable",
+            )
+        await s.delete(pickup)
+        audit(s, actor, "key.pickup", "key", k.id, after={"picked_up_by": actor.id}, org_id=k.org_id)
+        return {**_key_view(k), "key": plaintext, "pickup_available": False}
 
 
 @router.post("/keys/{key_id}/revoke")
@@ -361,6 +419,8 @@ async def rotate_key(
             tpm_limit=old.tpm_limit,
             metadata_=old.metadata_,
             rotated_from=old.id,
+            rotate_every_seconds=old.rotate_every_seconds,
+            rotation_grace_seconds=old.rotation_grace_seconds,
         )
         old.status = "revoked"
         old.revoked_at = datetime.now(UTC)

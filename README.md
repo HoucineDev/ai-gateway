@@ -59,6 +59,9 @@ built-in `pii`, `regex`, `keyword` detectors and an `http` contract for Presidio
 each `block`, `redact` or `flag`, with timeouts and fail-open/closed. Pre blocks cost nothing; streams are checked
 at the tail or fully buffered per policy; every outcome lands in `guardrail_events` and the Requests view.
 
+Scheduled key rotation (docs/spec/01 §3.2): give a key `rotate_every_seconds`; the worker rotates it with a grace
+period and seals the new plaintext for a single `POST /keys/{id}/pickup` (needs `AIGW_KEY_PICKUP_SECRET`).
+
 Control API with Keycloak (docs/spec/01 §3.1): the `oidc` compose profile starts Keycloak 26 with a dev realm
 (roles `aigw-admin` / `aigw-operator` / `aigw-viewer`, client `aigw-portal`, users alice/bob/carol/dan, password = username).
 

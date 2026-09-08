@@ -26,7 +26,9 @@ virtual_keys(
   status ENUM(active, revoked, expired), expires_at, revoked_at,
   allowed_models TEXT[] NULL (NULL = every model visible to the project),
   rpm_limit INT NULL, tpm_limit INT NULL,
-  metadata JSONB, rotated_from→virtual_keys NULL, grace_until TIMESTAMPTZ NULL)
+  metadata JSONB, rotated_from→virtual_keys NULL, grace_until TIMESTAMPTZ NULL,
+  rotate_every_seconds INT NULL, rotation_grace_seconds INT NULL)
+key_pickups(key_id PK→virtual_keys ON DELETE CASCADE, ciphertext BYTEA (Fernet, AIGW_KEY_PICKUP_SECRET), expires_at)
 ```
 
 Plaintext key format: `aigw_` + 40 url-safe random chars. Plaintext is returned once at creation and never stored.
