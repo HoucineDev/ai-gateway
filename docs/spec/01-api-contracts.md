@@ -143,7 +143,9 @@ Creating a binding requires `role_bindings:write` on the target tenant and, for 
 the role being granted at that target (`org_owner` > `team_owner` > `project_member`), so a team owner can add
 project members but cannot make org owners. Every binding write is audited; `GET /me` lists the caller's grants.
 
-Portal login: authorization-code flow with PKCE against the public client (`portal/src/lib/auth.ts`), tokens kept in
+Portal login: a dedicated `/login` page offers the admin key (bootstrap credential, verified through `GET /me`
+before entry) and *Sign in with SSO*, greyed out until `GET /auth/config` reports an issuer; unauthenticated pages
+redirect to `/login?redirect_to=…`. SSO is the authorization-code flow with PKCE against the public client (`portal/src/lib/auth.ts`), tokens kept in
 `sessionStorage`, refreshed with the refresh token 30 s before expiry; the portal discovers issuer and client id from
 `GET /auth/config` and hides actions whose scope `GET /me` does not grant. The API, not the UI, is the enforcement point.
 

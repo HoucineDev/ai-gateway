@@ -43,7 +43,7 @@ Local dev env: `AIGW_DATABASE_URL`, `AIGW_VALKEY_URL`, `AIGW_ADMIN_KEY` (see `.e
 | `src/aigw/admin` | control API `/admin/v1`, `auth` (admin key / Keycloak OIDC → global scopes + delegated grants, `require_scope`, `Actor.require`), `tenancy` (grant loading, SQL visibility predicates), `reconcile` (provider invoices vs ledger), `service` (audit, config bump) |
 | `src/aigw/worker` | outbox consumer, pending-attempt reconciliation, key expiry, `rotation` (scheduled key rotation + sealed pickup), `health` (active probes + vLLM `/metrics` scrape → `deployment_health`, Valkey cooldown and `dq:` pressure) |
 | `src/aigw/db` | SQLAlchemy models, Alembic migrations (`src/aigw/migrations`) |
-| `portal/` | React 18 + Vite + Tailwind v4 + TanStack Query; tokens in `src/index.css`; API client `src/lib/api.ts`; Keycloak PKCE login `src/lib/auth.ts`, scopes via `src/lib/session.tsx` (`useSession().can`, `<Can>`) |
+| `portal/` | React 18 + Vite + Tailwind v4 + TanStack Query; tokens in `src/index.css`; API client `src/lib/api.ts`; login page `src/pages/Login.tsx` (admin key or SSO), Keycloak PKCE `src/lib/auth.ts`, scopes via `src/lib/session.tsx` (`useSession().can`, `<Can>`) |
 | `deploy/` | Compose, Dockerfile (multi-stage: portal + python), Helm chart, ArgoCD example |
 | `.claude/skills/` | vendored `ui-ux-pro-max`, `design-system`, `ui-styling` — use for any portal/UI work |
 

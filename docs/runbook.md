@@ -46,8 +46,9 @@ curl -N localhost:8080/v1/chat/completions -H "authorization: Bearer $KEY" -H 'c
 ```
 
 Portal (graphical UI): open http://localhost:8081 (or `cd portal && npm run dev` → http://localhost:5173, proxying
-`/admin` to 8081). Sign in with Keycloak when the `oidc` profile runs (users `alice`/`bob`/`carol`/`dan`, password =
-username, roles admin/operator/viewer/none), otherwise paste the admin key in *Settings*. Pages: Overview, Models &
+`/admin` to 8081). The login page (`/login`) takes the admin key (`AIGW_ADMIN_KEY`) or *Sign in with SSO* when the
+`oidc` profile runs (users `alice`/`bob`/`carol`/`dan`, password = username, roles admin/operator/viewer/none);
+the SSO button is greyed out with *SSO not configured* until `AIGW_OIDC_ISSUER` is set on the admin role. Pages: Overview, Models &
 deployments, Organizations & keys, Budgets, Requests (per-request diagnostics), Audit, Settings. Write buttons are
 rendered only for scopes the caller holds; the control API enforces them regardless.
 
@@ -139,7 +140,8 @@ Provider credentials are secret references on deployments (`env:NAME`), never st
 | Rate limits not enforced | Valkey down and `AIGW_RATELIMIT_FAIL_MODE=open` (default); metric `aigw_ratelimit_degraded` = 1 |
 | 503 `no_eligible_deployment` for a model that has deployments | every deployment is disabled, in cooldown (portal → Models & deployments → *Cooldown* column; the snowflake button sets 10 min, click again to clear, or `POST /deployments/{id}/cooldown {"seconds": 0}`) or lacks a capability the request needs (tools, json_schema, context window); `GET /admin/v1/requests/{request_id}` shows the rejection reasons when the request carried `X-AIGW-Request-Id` |
 | `docker ps` shows worker or mock-upstream *unhealthy* on images built before 2026-09-08 | the image default healthcheck probes :8080; rebuild (`docker compose up -d --build`) — worker now has no healthcheck, mock-upstream probes :9000 |
-| Portal shows *Sign in to continue* | no credential in this browser: sign in with Keycloak or paste the admin key in Settings |
+| Portal redirects to `/login` | no credential in this browser: enter the admin key or use *Sign in with SSO*; the page returns to the URL you asked for |
+| Login page says *SSO not configured* | `GET /admin/v1/auth/config` returns `oidc: null`: set `AIGW_OIDC_ISSUER` (and audience) on the admin role |
 | Deployment shows *unhealthy* and requests avoid it | the worker's probe failed `AIGW_HEALTH_FAILURE_THRESHOLD` times (`error` says why: `timeout`, `transport: ConnectError`, `http_503`, `credential_missing`); fix the upstream or credential — the next healthy probe lifts the cooldown, or clear it by hand with `POST /deployments/{id}/cooldown {"seconds": 0}` (the worker will re-apply it while the probe keeps failing) |
 | Health column says *not probed* | the worker is not running or `AIGW_HEALTH_CHECK_INTERVAL_SECONDS=0`; check `docker compose logs worker` |
 | Traffic skews away from one deployment although it is healthy | adaptive routing: check its `signals` in a request's diagnostics (high `ttfb_ms`, `queue_waiting` or `inflight`); raise the matching `AIGW_ROUTING_*_REF` or set `AIGW_ROUTING_STRATEGY=weighted` to disable |
@@ -201,3 +203,5 @@ Provider credentials are secret references on deployments (`env:NAME`), never st
 - 2026-09-08 — scheduled key rotation (docs/spec/01 §3.2): `rotate_every_seconds` / `rotation_grace_seconds`,
   worker rotation with sealed one-time pickup (`key_pickups`, `AIGW_KEY_PICKUP_SECRET`), `PATCH /keys/{id}`,
   `POST /keys/{id}/pickup`, outbox `key.rotated`.
+- 2026-09-08 — portal login page (`/login`): admin key or *Sign in with SSO*, `redirect_to` round trip, logout
+  lands on it; unauthenticated pages redirect there.

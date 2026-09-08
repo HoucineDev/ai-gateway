@@ -9,6 +9,7 @@ import Requests from "./pages/Requests";
 import Audit from "./pages/Audit";
 import SettingsPage from "./pages/Settings";
 import Callback from "./pages/Callback";
+import Login from "./pages/Login";
 import { settings } from "./lib/api";
 import { SessionProvider, useSession } from "./lib/session";
 
@@ -42,28 +43,17 @@ function Identity() {
     );
   }
   if (oidc) return <button className="btn btn-secondary w-full" onClick={() => void login()}><LogIn size={16} aria-hidden="true" /> Sign in with Keycloak</button>;
-  return null;
+  return <Link className="btn btn-secondary w-full" to="/login"><LogIn size={16} aria-hidden="true" /> Sign in</Link>;
 }
 
-/** Without any credential every page would just render the API's 401; show what to do instead. */
+/** Without any credential every page would just render the API's 401: send the user to the login page instead
+ *  and bring them back afterwards. */
 function SignInGate({ children }: { children: React.ReactNode }) {
-  const { config, signedIn, login } = useSession();
-  const { pathname } = useLocation();
+  const { signedIn } = useSession();
+  const { pathname, search } = useLocation();
   const configured = signedIn || Boolean(settings.adminKey);
-  if (configured || !config || pathname === "/settings" || pathname === "/callback") return <>{children}</>;
-  return (
-    <div className="card mx-auto mt-16 max-w-md text-center">
-      <h1 className="text-lg font-semibold">Sign in to continue</h1>
-      <p className="mt-2 text-sm text-muted-foreground">
-        The control API needs a credential.{" "}
-        {config.oidc ? "Use your Keycloak account, or paste the admin key in Settings." : "Paste the admin key in Settings."}
-      </p>
-      <div className="mt-4 flex justify-center gap-2">
-        {config.oidc && <button className="btn btn-primary" onClick={() => void login(pathname)}><LogIn size={16} aria-hidden="true" /> Sign in with Keycloak</button>}
-        <Link className="btn btn-secondary" to="/settings">Settings</Link>
-      </div>
-    </div>
-  );
+  if (configured || pathname === "/login" || pathname === "/callback") return <>{children}</>;
+  return <Navigate to={`/login?redirect_to=${encodeURIComponent(pathname + search)}`} replace />;
 }
 
 export default function App() {
@@ -72,7 +62,16 @@ export default function App() {
 
 function Shell() {
   const { signedIn } = useSession();
+  const { pathname } = useLocation();
   const configured = signedIn || Boolean(settings.adminKey);
+  if (pathname === "/login" || pathname === "/callback") {
+    return (
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="/callback" element={<Callback />} />
+      </Routes>
+    );
+  }
   return (
     <div className="flex min-h-full">
       <aside className="hidden w-64 shrink-0 border-r border-border bg-primary/60 p-4 md:flex md:flex-col">
@@ -99,7 +98,7 @@ function Shell() {
         </nav>
         <SignInGate>
         <Routes>
-          <Route path="/" element={<Navigate to={configured ? "/overview" : "/settings"} replace />} />
+          <Route path="/" element={<Navigate to={configured ? "/overview" : "/login"} replace />} />
           <Route path="/overview" element={<Overview />} />
           <Route path="/catalog" element={<Catalog />} />
           <Route path="/tenancy" element={<Tenancy />} />
@@ -108,6 +107,7 @@ function Shell() {
           <Route path="/requests/:id" element={<Requests />} />
           <Route path="/audit" element={<Audit />} />
           <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/login" element={<Login />} />
           <Route path="/callback" element={<Callback />} />
         </Routes>
         </SignInGate>

@@ -32,6 +32,7 @@ export default function SettingsPage() {
       </div>
       <div className="card max-w-xl">
         <h2 className="mb-1 text-base font-semibold">Admin key</h2>
+        <p className="mb-3 text-xs text-muted-foreground">First-time sign-in happens on the <a className="underline" href="/login">login page</a>; change the stored key here.</p>
         <form onSubmit={(e) => { e.preventDefault(); settings.adminKey = key; settings.baseUrl = base; setSaved(true); }}>
           <Field label="Control API base URL" hint="Leave empty when the portal is served by the admin role or proxied by Vite.">
             {(id) => <input id={id} className="input" value={base} onChange={(e) => setBase(e.target.value)} placeholder="http://localhost:8081" />}

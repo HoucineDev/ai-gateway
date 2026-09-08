@@ -42,6 +42,11 @@ function read(): Tokens | null {
 }
 function write(t: Tokens | null) {
   if (t) sessionStorage.setItem(TOKENS, JSON.stringify(t)); else sessionStorage.removeItem(TOKENS);
+  notifyAuthChanged();
+}
+
+/** Tell SessionProvider that credentials changed (OIDC tokens or the admin key). */
+export function notifyAuthChanged(): void {
   window.dispatchEvent(new Event(AUTH_CHANGED));
 }
 
@@ -122,7 +127,7 @@ export const auth = {
     if (!end_session_endpoint) return;
     const url = new URL(end_session_endpoint);
     url.searchParams.set("client_id", cfg.client_id);
-    url.searchParams.set("post_logout_redirect_uri", `${window.location.origin}/settings`);
+    url.searchParams.set("post_logout_redirect_uri", `${window.location.origin}/login`);
     if (t?.id_token) url.searchParams.set("id_token_hint", t.id_token);
     window.location.assign(url.toString());
   },

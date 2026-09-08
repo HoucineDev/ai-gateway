@@ -39,7 +39,7 @@ curl -N localhost:8080/v1/chat/completions \
   -d '{"model":"local-chat","stream":true,"messages":[{"role":"user","content":"hello"}]}'
 
 curl localhost:8081/admin/v1/overview -H 'x-admin-key: change-me-admin'
-open http://localhost:8081            # portal — sign in with Keycloak (oidc profile) or paste the admin key in Settings
+open http://localhost:8081            # portal login page: admin key, or Sign in with SSO when Keycloak is configured
 ```
 
 Portal development: `cd portal && npm install && npm run dev` (proxies `/admin` to `localhost:8081`).
@@ -72,8 +72,9 @@ TOKEN=$(curl -s -d grant_type=password -d client_id=aigw-portal -d username=alic
 curl localhost:8081/admin/v1/me -H "authorization: Bearer $TOKEN"
 ```
 
-The portal signs in through the same realm (authorization code + PKCE, no library): open http://localhost:8081, click
-*Sign in with Keycloak*, log in as `carol` and the write actions disappear; `alice` gets them all. The portal reads the
+The portal's login page (`/login`) takes the admin key or *Sign in with SSO* (authorization code + PKCE, no library):
+open http://localhost:8081, sign in as `carol` and the write actions disappear; `alice` gets them all. Any
+unauthenticated page redirects to `/login?redirect_to=…` and returns there afterwards. The portal reads the
 issuer and client id from `GET /admin/v1/auth/config`, so the build carries no environment-specific settings.
 
 Delegated roles (docs/spec/01 §3.2): besides the global Keycloak roles, a user can be bound as *org owner*, *team owner*
