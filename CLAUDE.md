@@ -27,6 +27,7 @@ cd portal && npm install && npm run dev     # portal on :5173, proxies /admin to
 cd portal && npm run build                  # admin role serves portal/dist at /
 cd deploy/compose && docker compose up -d --build
 docker compose --profile oidc up -d keycloak && python scripts/oidc_smoke.py   # Keycloak dev realm + control-API bearer smoke test
+python scripts/loadtest.py --key $KEY --upstream http://localhost:9000        # load test + gateway-added latency (docs/spec/06)
 ```
 
 Local dev env: `AIGW_DATABASE_URL`, `AIGW_VALKEY_URL`, `AIGW_ADMIN_KEY` (see `.env.example`). Mock upstream:
@@ -56,6 +57,6 @@ Local dev env: `AIGW_DATABASE_URL`, `AIGW_VALKEY_URL`, `AIGW_ADMIN_KEY` (see `.e
 ## Roadmap (docs/spec/07-parity-backlog.md)
 
 Phase 2 done: Keycloak OIDC roles on control API, delegated tenant roles, portal SSO, active health checks, adaptive
-routing (latency EWMA + vLLM queue pressure + local admission control), exact response cache, Azure OpenAI, Gemini (Vertex/Google AI) and Bedrock adapters. Next: provider invoice reconciliation, load-test harness.
+routing (latency EWMA + vLLM queue pressure + local admission control), exact response cache, Azure OpenAI, Gemini (Vertex/Google AI) and Bedrock adapters, load-test harness. Next: provider invoice reconciliation.
 Phase 3: SCIM, scheduled key rotation, guardrail pipeline, scoped logging exporters, approvals, retention.
 Phase 4: native Anthropic/Gemini/Bedrock ingress, media APIs, files/batches, MCP/A2A, agent run limits, multi-region.

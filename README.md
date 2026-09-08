@@ -46,6 +46,10 @@ Portal development: `cd portal && npm install && npm run dev` (proxies `/admin` 
 
 Operations (ports, start/stop, checks, common tasks, troubleshooting): [`docs/runbook.md`](docs/runbook.md).
 
+Load test (docs/spec/06): `python scripts/loadtest.py --key $KEY --requests 500 --concurrency 32 --upstream http://localhost:9000`
+reports RPS, TTFB/total p50/p95/p99, error codes and the gateway's *added* latency against the mock upstream; add
+`--max-added-p95-ms 25 --max-error-rate 0.01` to fail the run in CI.
+
 Control API with Keycloak (docs/spec/01 §3.1): the `oidc` compose profile starts Keycloak 26 with a dev realm
 (roles `aigw-admin` / `aigw-operator` / `aigw-viewer`, client `aigw-portal`, users alice/bob/carol/dan, password = username).
 

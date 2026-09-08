@@ -43,6 +43,7 @@ Feature families from the proposal's reference inventory, with the phase in whic
 | Budget-, tag-, priority-based routing | P3 | |
 | Exact response cache (tenant/policy scoped) | P2 ✓ | per-project policy, Valkey, zero-cost `cached` attempts (docs/spec/04 §9, `tests/test_cache.py`) |
 | Semantic cache (opt-in, single-turn) | P4 | |
+| Load-test harness (RPS, streams, payload sizes, added latency, CI gate) | P2 ✓ | `scripts/loadtest.py`, `aigw.testing.loadtest`, `tests/test_load.py` (docs/spec/06) |
 | Routing explanations and policy simulation (differentiator) | P3 (explanations ✓) | diagnostics record stores candidates, rejections and per-candidate signals/scores; simulation P3 |
 | Multi-region config distribution | P4 | |
 

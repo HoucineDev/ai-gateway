@@ -65,6 +65,7 @@ pytest tests/test_admin_oidc.py --noconftest -k "not api"   # OIDC verifier test
 ruff check src tests scripts && ruff format --check src tests scripts
 python scripts/independence_gate.py             # fails on any litellm artefact, including pip freeze of the environment
 cd portal && npx tsc -b && npm run build
+python scripts/loadtest.py --key $KEY --requests 500 --concurrency 32 --upstream http://localhost:9000   # load + added latency
 ```
 
 ## 4. Configuration quick reference
@@ -103,6 +104,7 @@ Provider credentials are secret references on deployments (`env:NAME`), never st
 | Turn on the response cache for a project | `PATCH /admin/v1/projects/{id} {"settings": {...existing..., "cache": {"enabled": true, "ttl_seconds": 300, "deterministic_only": false}}}` (settings are replaced whole: keep `allowed_tags`); takes effect on the next snapshot refresh (≤ 5 s) |
 | Check whether a response came from cache | response header `X-AIGW-Cache` (`hit`/`miss`/`refresh`/`bypass`/`off`), body `aigw.cached`, Requests page status *cached* with cost 0; metric `aigw_cache_total` |
 | Force a fresh answer | send `X-AIGW-Cache: no-cache` (refreshes the entry) or `no-store` (leaves the cache untouched) |
+| Measure gateway overhead / capacity | `python scripts/loadtest.py --key <virtual key> --duration 60 --concurrency 64 --stream-ratio 0.8 --upstream http://localhost:9000 --json run.json`; compare *added* p95 between builds; `--steer slow` makes the mock answer in ~400 ms like a real model; thresholds (`--max-added-p95-ms`, `--max-error-rate`, `--min-rps`) exit 1 for CI |
 | Explain a routing decision | `GET /admin/v1/requests/{request_id}` → `attempts[].routing`: `strategy`, `candidates`, `rejected` (reason per deployment) and `signals` (per-candidate `ttfb_ms`, `queue_waiting`, `inflight`, `weight`, `score`) |
 | Raise a budget temporarily | `POST /admin/v1/budgets/{id}/temporary-increase {"amount": "50", "until": "<RFC3339>"}` |
 | Add a price version | `POST /admin/v1/prices` (insert-only, versioned by `effective_from`) |
@@ -144,6 +146,9 @@ Provider credentials are secret references on deployments (`env:NAME`), never st
 | 503 `gemini_project_required` | a Vertex `gemini` deployment lacks `capabilities.project` |
 | Gemini deployment unhealthy with `auth: authentication` | the service-account JWT grant was refused: check the key file (`client_email`, `private_key`), the account's Vertex AI role, and `token_url` if overridden |
 | Bedrock answers 403 *signature does not match* | the credential's secret is wrong, the clock is off by more than 15 min, or `capabilities.region` differs from the endpoint region |
+| Load test shows 429 `rate_limited` / `budget_exceeded` | the key/project RPM/TPM or budget is the ceiling, not the gateway: raise them for the test key or read the errors as the intended admission behaviour |
+| Load test added p95 jumps between builds | run both builds with the same `--seed`, `--concurrency` and `--steer`; check Valkey health (rate-limit and cooldown round trips) and `AIGW_ROUTING_STRATEGY` before blaming code |
+| A price added seconds ago is not applied (cost 0 on the next requests) | prices are filtered by `effective_from <= now` using the application clock (the one that stamps them); a future `effective_from` is honoured literally — check the value, not the database clock |
 | 503 `no_eligible_deployment` with reason `saturated` | this replica has `max_concurrency` requests open on every eligible deployment; raise the cap, add deployments or gateway replicas |
 
 ## 7. Change log of operational behaviour
@@ -172,3 +177,7 @@ Provider credentials are secret references on deployments (`env:NAME`), never st
   serves the Gemini routes and a token endpoint.
 - 2026-09-08 — `bedrock` adapter (docs/spec/03 §4.3): Converse / ConverseStream / InvokeModel, owned SigV4 and
   event-stream decoder, Titan + Cohere embeddings; mock upstream verifies SigV4 signatures.
+- 2026-09-08 — load-test harness (docs/spec/06): `scripts/loadtest.py` / `aigw.testing.loadtest`, added-latency
+  baseline against the upstream, threshold gate; `tests/test_load.py` asserts ledger invariants under concurrency.
+- 2026-09-08 — price resolution compares `effective_from` with the application clock instead of Postgres `now()`
+  (a clock skew between host and database container made a just-created price invisible for a moment).

@@ -9,6 +9,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import func, select
@@ -208,7 +209,9 @@ class SnapshotStore:
         rows = (
             await s.execute(
                 select(Price)
-                .where(Price.effective_from <= func.now())
+                .where(
+                    Price.effective_from <= datetime.now(UTC)
+                )  # app clock, same source that stamps effective_from  # noqa: E501
                 .order_by(Price.provider, Price.provider_model, Price.version)
             )
         ).scalars()
