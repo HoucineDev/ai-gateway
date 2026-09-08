@@ -205,6 +205,158 @@ async def azure_models(request: Request):
     return {"object": "list", "data": [{"id": "gpt-4o", "object": "model"}]}
 
 
+GEMINI_TOKEN, GEMINI_KEY, SA_TOKEN = "gemini-test-token", "gemini-test-key", "mock-sa-token"
+
+
+def _gemini_auth(request: Request):
+    auth = request.headers.get("authorization", "")
+    STATE["last_headers"] = {k: v for k, v in request.headers.items() if k in ("authorization", "x-goog-api-key")}
+    if auth in (f"Bearer {GEMINI_TOKEN}", f"Bearer {SA_TOKEN}") or request.headers.get("x-goog-api-key") == GEMINI_KEY:
+        return None
+    return JSONResponse(
+        {
+            "error": {
+                "code": 401,
+                "message": "Request had invalid authentication credentials.",
+                "status": "UNAUTHENTICATED",
+            }
+        },
+        status_code=401,
+    )
+
+
+def _gemini_last_text(body: dict) -> str:
+    contents = body.get("contents") or []
+    last = contents[-1] if contents else {}
+    return " ".join(p.get("text", "") for p in last.get("parts", []) if isinstance(p, dict) and "text" in p)
+
+
+async def _gemini_generate(model: str, request: Request):
+    body = await request.json()
+    STATE["calls"] += 1
+    STATE["last_body"] = body
+    STATE["last_url"] = str(request.url)
+    STATE["last_model"] = model
+    denied = _gemini_auth(request)
+    if denied:
+        return denied
+    prompt = _gemini_last_text(body)
+    if "[fail:" in prompt:
+        code = int(prompt.split("[fail:")[1].split("]")[0])
+        return JSONResponse(
+            {"error": {"code": code, "message": f"mock failure {code}", "status": "UNAVAILABLE"}}, status_code=code
+        )
+    if "[blocked]" in prompt:
+        return {
+            "promptFeedback": {"blockReason": "SAFETY"},
+            "usageMetadata": {"promptTokenCount": 3, "totalTokenCount": 3},
+        }
+    text = f"Echo: {prompt}"
+    usage = {
+        "promptTokenCount": 11,
+        "candidatesTokenCount": len(text) // 4 + 1,
+        "totalTokenCount": 11 + len(text) // 4 + 1,
+    }
+    rid = f"gem-{uuid.uuid4().hex[:8]}"
+    if "[tool]" in prompt:
+        parts = [{"functionCall": {"name": "get_weather", "args": {"city": "Lyon"}}}]
+    else:
+        parts = [{"text": text}]
+    if request.query_params.get("alt") != "sse":
+        return {
+            "candidates": [{"content": {"role": "model", "parts": parts}, "finishReason": "STOP", "index": 0}],
+            "usageMetadata": usage,
+            "modelVersion": model,
+            "responseId": rid,
+        }
+
+    async def gen():
+        if "[tool]" in prompt:
+            yield f"data: {json.dumps({'candidates': [{'content': {'role': 'model', 'parts': parts}, 'finishReason': 'STOP', 'index': 0}], 'usageMetadata': usage, 'modelVersion': model, 'responseId': rid})}\n\n"
+            return
+        half = len(text) // 2
+        yield f"data: {json.dumps({'candidates': [{'content': {'role': 'model', 'parts': [{'text': text[:half]}]}, 'index': 0}], 'modelVersion': model, 'responseId': rid})}\n\n"
+        await asyncio.sleep(0.01)
+        yield f"data: {json.dumps({'candidates': [{'content': {'role': 'model', 'parts': [{'text': text[half:]}]}, 'finishReason': 'STOP', 'index': 0}], 'usageMetadata': usage, 'modelVersion': model, 'responseId': rid})}\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream", headers={"x-request-id": rid})
+
+
+@mock.post("/v1/projects/{project}/locations/{location}/publishers/google/models/{model}:generateContent")
+async def vertex_generate(project: str, location: str, model: str, request: Request):
+    return await _gemini_generate(model, request)
+
+
+@mock.post("/v1/projects/{project}/locations/{location}/publishers/google/models/{model}:streamGenerateContent")
+async def vertex_stream(project: str, location: str, model: str, request: Request):
+    return await _gemini_generate(model, request)
+
+
+@mock.post("/v1beta/models/{model}:generateContent")
+async def google_ai_generate(model: str, request: Request):
+    return await _gemini_generate(model, request)
+
+
+@mock.post("/v1beta/models/{model}:streamGenerateContent")
+async def google_ai_stream(model: str, request: Request):
+    return await _gemini_generate(model, request)
+
+
+@mock.post("/v1/projects/{project}/locations/{location}/publishers/google/models/{model}:predict")
+async def vertex_predict(project: str, location: str, model: str, request: Request):
+    body = await request.json()
+    STATE["calls"] += 1
+    STATE["last_body"] = body
+    STATE["last_url"] = str(request.url)
+    denied = _gemini_auth(request)
+    if denied:
+        return denied
+    dims = (body.get("parameters") or {}).get("outputDimensionality") or 8
+    return {
+        "predictions": [
+            {
+                "embeddings": {
+                    "values": [float((i + j) % 7) / 7 for j in range(dims)],
+                    "statistics": {"token_count": len(inst["content"]) // 4 + 1},
+                }
+            }
+            for i, inst in enumerate(body["instances"])
+        ]
+    }
+
+
+@mock.post("/v1beta/models/{model}:batchEmbedContents")
+async def google_ai_embed(model: str, request: Request):
+    body = await request.json()
+    STATE["calls"] += 1
+    STATE["last_body"] = body
+    denied = _gemini_auth(request)
+    if denied:
+        return denied
+    return {"embeddings": [{"values": [0.1 * i, 0.2, 0.3]} for i, _ in enumerate(body["requests"])]}
+
+
+@mock.get("/v1/projects/{project}/locations/{location}/publishers/google/models/{model}")
+async def vertex_model(project: str, location: str, model: str, request: Request):
+    return _gemini_auth(request) or {"name": f"publishers/google/models/{model}"}
+
+
+@mock.get("/v1beta/models/{model}")
+async def google_ai_model(model: str, request: Request):
+    return _gemini_auth(request) or {"name": f"models/{model}"}
+
+
+@mock.post("/token")
+async def token(request: Request):
+    """Google OAuth2 token endpoint stand-in for service-account JWT bearer grants."""
+    form = await request.form()
+    STATE["token_calls"] = STATE.get("token_calls", 0) + 1
+    STATE["last_assertion"] = form.get("assertion")
+    if form.get("grant_type") != "urn:ietf:params:oauth:grant-type:jwt-bearer" or not form.get("assertion"):
+        return JSONResponse({"error": "invalid_grant"}, status_code=400)
+    return {"access_token": SA_TOKEN, "expires_in": 3600, "token_type": "Bearer"}
+
+
 @mock.post("/v1/embeddings")
 async def embeddings(request: Request):
     body = await request.json()

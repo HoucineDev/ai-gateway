@@ -5,6 +5,7 @@ import httpx
 from aigw.adapters.anthropic import AnthropicAdapter
 from aigw.adapters.azure_openai import AzureOpenAIAdapter
 from aigw.adapters.base import BaseHTTPAdapter
+from aigw.adapters.gemini import GeminiAdapter
 from aigw.adapters.openai import OpenAIAdapter
 from aigw.adapters.openai_compat import OpenAICompatAdapter
 from aigw.core.errors import ErrorType, GatewayError
@@ -20,6 +21,7 @@ class AdapterRegistry:
             "openai": OpenAIAdapter(client, **kw),
             "anthropic": AnthropicAdapter(client, **kw),
             "azure_openai": AzureOpenAIAdapter(client, **kw),
+            "gemini": GeminiAdapter(client, **kw),
         }
 
     def get(self, provider: str) -> BaseHTTPAdapter:

@@ -12,6 +12,7 @@ once. PostgreSQL stays the authority; Valkey only carries the signal to the gate
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import re
 import time
@@ -22,7 +23,7 @@ from sqlalchemy import select
 
 from aigw.adapters.anthropic import ANTHROPIC_VERSION
 from aigw.adapters.registry import AdapterRegistry
-from aigw.core.errors import GatewayError
+from aigw.core.errors import GatewayError, UpstreamError
 from aigw.core.secrets import SecretResolver
 from aigw.db.models import Deployment, DeploymentHealth
 from aigw.gateway.ratelimit import CooldownStore
@@ -78,9 +79,14 @@ class HealthChecker:
     async def probe(self, d: Deployment) -> tuple[bool, int | None, str | None]:
         """(ok, latency_ms, error). Transport errors, timeouts and 5xx are failures; any other answer means up."""
         try:
-            url, headers = self.probe_request(d)
+            target = self.probe_request(d)
+            if inspect.isawaitable(target):
+                target = await target
+            url, headers = target
         except GatewayError as exc:
             return False, None, exc.code
+        except UpstreamError as exc:
+            return False, None, f"auth: {exc.error_class.value}"
         started = time.perf_counter()
         try:
             async with self._sem:

@@ -38,7 +38,7 @@ models(id, org_id NULL (global when NULL), name, display_name, modalities TEXT[]
        context_window INT, supports_tools BOOL, supports_json_schema BOOL, supports_vision BOOL,
        status, metadata JSONB)                                              UNIQUE(org_id, name)
 deployments(id, model_id→models, org_id NULL, name,
-       provider ENUM(openai_compat, openai, anthropic, azure_openai),
+       provider ENUM(openai_compat, openai, anthropic, azure_openai, gemini),
        provider_model TEXT, base_url TEXT NULL, credential_ref TEXT (env:NAME | openbao:path#key),
        weight INT DEFAULT 1, priority INT DEFAULT 0 (lower = preferred),
        status ENUM(active, disabled), cooldown_until TIMESTAMPTZ NULL,
