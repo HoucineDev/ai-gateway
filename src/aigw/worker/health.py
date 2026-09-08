@@ -61,8 +61,10 @@ class HealthChecker:
 
     def probe_request(self, d: Deployment) -> tuple[str, dict[str, str]]:
         adapter = self.adapters.get(d.provider)
-        base = (d.base_url or adapter.default_base_url).rstrip("/")
         credential = self.secrets.resolve(d.credential_ref)
+        if hasattr(adapter, "probe_request"):  # provider-specific target (Azure: /openai/models?api-version=…)
+            return adapter.probe_request(d, credential)
+        base = (d.base_url or adapter.default_base_url).rstrip("/")
         headers: dict[str, str] = {k: str(v) for k, v in (d.extra_headers or {}).items()}
         if d.provider == "anthropic":
             headers["anthropic-version"] = ANTHROPIC_VERSION

@@ -3,6 +3,7 @@ from __future__ import annotations
 import httpx
 
 from aigw.adapters.anthropic import AnthropicAdapter
+from aigw.adapters.azure_openai import AzureOpenAIAdapter
 from aigw.adapters.base import BaseHTTPAdapter
 from aigw.adapters.openai import OpenAIAdapter
 from aigw.adapters.openai_compat import OpenAICompatAdapter
@@ -18,6 +19,7 @@ class AdapterRegistry:
             "openai_compat": OpenAICompatAdapter(client, **kw),
             "openai": OpenAIAdapter(client, **kw),
             "anthropic": AnthropicAdapter(client, **kw),
+            "azure_openai": AzureOpenAIAdapter(client, **kw),
         }
 
     def get(self, provider: str) -> BaseHTTPAdapter:

@@ -54,7 +54,7 @@ Rules: `usage` may arrive before or after `finish`; `end` is always last; an ada
 
 ## 4. Request translation
 
-| Canonical | openai_compat / openai | anthropic |
+| Canonical | openai_compat / openai / azure_openai | anthropic |
 |-----------|------------------------|-----------|
 | `messages[system]` | passed as role `system` | concatenated into top-level `system` |
 | `max_tokens` | `max_tokens` (`max_completion_tokens` for openai) | `max_tokens` (required; default from deployment `capabilities.default_max_tokens`, else 4096) |
@@ -69,9 +69,19 @@ Rules: `usage` may arrive before or after `finish`; `end` is always last; an ada
 
 Unsupported fields are rejected, never silently dropped (proposal: "reject unsupported fields or expose explicit provider extensions").
 
+### 4.1 Azure OpenAI specifics
+
+`azure_openai` reuses the OpenAI translation with Azure addressing: `base_url` is the resource endpoint
+(`https://<resource>.openai.azure.com`, required), `provider_model` is the Azure *deployment name*, requests go to
+`{base_url}/openai/deployments/{provider_model}/(chat/completions|embeddings)?api-version=<capabilities.api_version,
+default 2024-10-21>` and the body carries no `model` field. `max_tokens` is sent as-is; set
+`capabilities.max_tokens_field = "max_completion_tokens"` for o-series deployments. No provider-extension passthrough.
+Prices are keyed by `(azure_openai, <deployment name>)`. The active health probe targets `/openai/models`.
+
 ## 5. Authentication
 
-`credential_ref` formats: `env:VAR_NAME` (alpha), `openbao:<mount>/<path>#<key>` (Phase 2), `none` (unauthenticated local endpoints). Resolution happens in `aigw.core.secrets` and the resolved value is never logged or persisted. Cloud signing (Bedrock SigV4, Vertex workload identity) is a per-adapter concern added with those adapters.
+`credential_ref` formats: `env:VAR_NAME` (alpha), `openbao:<mount>/<path>#<key>` (Phase 2), `none` (unauthenticated local endpoints). Resolution happens in `aigw.core.secrets` and the resolved value is never logged or persisted. `azure_openai` sends the resolved credential as the `api-key` header, or as an Entra ID bearer token when
+`capabilities.auth = "bearer"`. Cloud signing (Bedrock SigV4, Vertex workload identity) is a per-adapter concern added with those adapters.
 
 ## 6. Error classification
 

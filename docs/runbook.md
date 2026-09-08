@@ -93,6 +93,7 @@ Provider credentials are secret references on deployments (`env:NAME`), never st
 |------|-----|
 | Revoke a key immediately | portal → Organizations & keys → revoke, or `POST /admin/v1/keys/{id}/revoke`; lands on gateways within ~1 s via Valkey, worst case one refresh interval |
 | Rotate a key with grace | `POST /admin/v1/keys/{id}/rotate {"grace_seconds": 3600}` |
+| Add an Azure OpenAI deployment | `POST /admin/v1/models/{model}/deployments {"provider": "azure_openai", "provider_model": "<azure deployment name>", "base_url": "https://<resource>.openai.azure.com", "credential_ref": "env:AZURE_OPENAI_KEY", "capabilities": {"api_version": "2024-10-21"}}`; add a price row for `(azure_openai, <deployment name>)`; Entra auth: `"capabilities": {"auth": "bearer"}` with a token in the credential ref |
 | Take a deployment out of rotation | `POST /admin/v1/deployments/{id}/cooldown {"seconds": 600}` or PATCH `status: disabled` |
 | See upstream health | portal → Models & deployments → *Health* column (status, latency, error, failures, vLLM queue depth and KV-cache use), or `GET /admin/v1/models` → `deployments[].health` |
 | Make a vLLM deployment GPU-aware | set `capabilities: {"engine": "vllm"}` on the deployment (metrics URL derived from `base_url` minus `/v1`) or an explicit `"metrics_url"`; the worker scrapes it every health sweep |
@@ -136,6 +137,8 @@ Provider credentials are secret references on deployments (`env:NAME`), never st
 | Traffic skews away from one deployment although it is healthy | adaptive routing: check its `signals` in a request's diagnostics (high `ttfb_ms`, `queue_waiting` or `inflight`); raise the matching `AIGW_ROUTING_*_REF` or set `AIGW_ROUTING_STRATEGY=weighted` to disable |
 | Cache never hits (`X-AIGW-Cache: miss` every time) | different `provider_model` chosen by routing (entries are per deployment provider model), a field such as `temperature` differs, `deterministic_only` is on and the request is not pinned, or Valkey is down (every lookup misses) |
 | `X-AIGW-Cache: off` although the project enabled it | snapshot not refreshed yet (≤ 5 s), the key belongs to another project, or `deterministic_only` excludes the request |
+| 503 `azure_base_url_required` | an `azure_openai` deployment has no `base_url`; set it to the resource endpoint |
+| Azure answers 401 `Access denied due to invalid subscription key` | wrong `credential_ref` value or the key belongs to another resource; with `capabilities.auth=bearer` the token must be an Entra token for `https://cognitiveservices.azure.com` |
 | 503 `no_eligible_deployment` with reason `saturated` | this replica has `max_concurrency` requests open on every eligible deployment; raise the cap, add deployments or gateway replicas |
 
 ## 7. Change log of operational behaviour
@@ -157,3 +160,5 @@ Provider credentials are secret references on deployments (`env:NAME`), never st
   migration `0b94f242d83b`), `AIGW_ROUTING_*` settings, per-candidate signals in request diagnostics.
 - 2026-09-08 — exact response cache (docs/spec/04 §9): per-project `settings.cache`, Valkey `rc:` entries,
   `X-AIGW-Cache` request/response header, zero-cost `cached` attempts, `aigw_cache_total` metric.
+- 2026-09-08 — `azure_openai` adapter (docs/spec/03 §4.1): deployment-name addressing, `api-version`, `api-key` or
+  Entra bearer auth, health probe on `/openai/models`; mock upstream serves the Azure routes.

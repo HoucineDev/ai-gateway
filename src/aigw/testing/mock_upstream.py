@@ -93,7 +93,7 @@ async def chat(request: Request):
                 "id": rid,
                 "object": "chat.completion",
                 "created": int(time.time()),
-                "model": body["model"],
+                "model": body.get("model") or STATE.get("last_deployment") or "mock",
                 "choices": [{"index": 0, "message": msg, "finish_reason": fr}],
                 "usage": usage,
             },
@@ -101,7 +101,12 @@ async def chat(request: Request):
         )
 
     async def gen():
-        base = {"id": rid, "object": "chat.completion.chunk", "created": int(time.time()), "model": body["model"]}
+        base = {
+            "id": rid,
+            "object": "chat.completion.chunk",
+            "created": int(time.time()),
+            "model": body.get("model") or STATE.get("last_deployment") or "mock",
+        }
         yield _sse(
             {**base, "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None}]}
         )
@@ -167,6 +172,39 @@ async def chat(request: Request):
     return StreamingResponse(gen(), media_type="text/event-stream", headers={"x-request-id": rid})
 
 
+AZURE_KEY = "azure-test-key"
+
+
+def _azure_gate(deployment: str, request: Request):
+    """Azure addressing: api-version query, api-key (or Entra bearer) header. Records what the adapter sent."""
+    STATE["last_deployment"] = deployment
+    STATE["last_query"] = dict(request.query_params)
+    STATE["last_headers"] = {k: v for k, v in request.headers.items() if k in ("api-key", "authorization")}
+    if "api-version" not in request.query_params:
+        return JSONResponse({"error": {"code": "400", "message": "api-version is required"}}, status_code=400)
+    ok = request.headers.get("api-key") == AZURE_KEY or request.headers.get("authorization", "").startswith("Bearer ")
+    if not ok:
+        return JSONResponse(
+            {"error": {"code": "401", "message": "Access denied due to invalid subscription key"}}, status_code=401
+        )
+    return None
+
+
+@mock.post("/openai/deployments/{deployment}/chat/completions")
+async def azure_chat(deployment: str, request: Request):
+    return _azure_gate(deployment, request) or await chat(request)
+
+
+@mock.post("/openai/deployments/{deployment}/embeddings")
+async def azure_embeddings(deployment: str, request: Request):
+    return _azure_gate(deployment, request) or await embeddings(request)
+
+
+@mock.get("/openai/models")
+async def azure_models(request: Request):
+    return {"object": "list", "data": [{"id": "gpt-4o", "object": "model"}]}
+
+
 @mock.post("/v1/embeddings")
 async def embeddings(request: Request):
     body = await request.json()
@@ -183,7 +221,7 @@ async def embeddings(request: Request):
     tokens = sum(len(str(x)) for x in inputs) // 4 + 1
     return {
         "object": "list",
-        "model": body["model"],
+        "model": body.get("model") or STATE.get("last_deployment") or "mock",
         "data": data,
         "usage": {"prompt_tokens": tokens, "total_tokens": tokens},
     }
@@ -254,7 +292,7 @@ async def messages(request: Request):
                 "id": rid,
                 "type": "message",
                 "role": "assistant",
-                "model": body["model"],
+                "model": body.get("model") or STATE.get("last_deployment") or "mock",
                 "content": content,
                 "stop_reason": stop,
                 "usage": {"input_tokens": in_tok, "output_tokens": out_tok},
@@ -267,7 +305,11 @@ async def messages(request: Request):
             "message_start",
             {
                 "type": "message_start",
-                "message": {"id": rid, "model": body["model"], "usage": {"input_tokens": in_tok, "output_tokens": 0}},
+                "message": {
+                    "id": rid,
+                    "model": body.get("model") or STATE.get("last_deployment") or "mock",
+                    "usage": {"input_tokens": in_tok, "output_tokens": 0},
+                },
             },
         )
         if steer == "tool":

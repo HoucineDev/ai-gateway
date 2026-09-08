@@ -68,7 +68,7 @@ Feature families from the proposal's reference inventory, with the phase in whic
 | OpenAI-compatible local (vLLM, KServe, TGI…) | P1 |
 | OpenAI | P1 |
 | Anthropic | P1 |
-| Azure OpenAI | P2 |
+| Azure OpenAI | P2 ✓ (`azure_openai`, docs/spec/03 §4.1, `tests/test_azure.py`) |
 | Gemini / Vertex | P2 |
 | Bedrock | P2 |
 | Mistral, Cohere, others | on demand |
