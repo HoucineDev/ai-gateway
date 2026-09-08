@@ -35,7 +35,8 @@ from aigw.core.types import (
 from aigw.gateway import metrics
 from aigw.gateway.accounting import Ledger, Reservation
 from aigw.gateway.ratelimit import CooldownStore, LimitScope, RateLimiter
-from aigw.gateway.router import Candidate, Router, RoutingDecision
+from aigw.gateway.router import Candidate, Router, RoutingDecision, RoutingPolicy
+from aigw.gateway.signals import RoutingSignals
 from aigw.gateway.snapshot import KeyScope, ModelInfo, SnapshotStore
 
 log = logging.getLogger(__name__)
@@ -69,6 +70,7 @@ class Pipeline:
         cooldowns: CooldownStore,
         secrets: SecretResolver,
         router: Router | None = None,
+        signals: RoutingSignals | None = None,
     ):
         self.settings = settings
         self.snapshots = snapshots
@@ -77,7 +79,10 @@ class Pipeline:
         self.limiter = limiter
         self.cooldowns = cooldowns
         self.secrets = secrets
-        self.router = router or Router(adapters, cooldowns)
+        self.signals = signals or RoutingSignals.build(None, settings.routing_ewma_alpha)
+        self.router = router or Router(
+            adapters, cooldowns, signals=self.signals, policy=RoutingPolicy.from_settings(settings)
+        )
         self._background: set[asyncio.Task] = set()
 
     def _detach(self, coro) -> None:
@@ -145,6 +150,7 @@ class Pipeline:
 
     # ---- attempt bookkeeping ------------------------------------------------
     async def _reserve(self, ctx: RequestContext, cand: Candidate) -> Reservation:
+        self.signals.inflight.inc(cand.deployment.id)
         ctx.attempt_no += 1
         if ctx.attempt_no > self.settings.max_attempts:
             raise GatewayError(ErrorType.unavailable, "Maximum attempts exhausted", code="max_attempts")
@@ -179,6 +185,9 @@ class Pipeline:
         err: UpstreamError | None = None,
         first_byte_at: datetime | None = None,
     ) -> None:
+        self.signals.inflight.dec(cand.deployment.id)
+        if status == "succeeded" and ttfb is not None:
+            self.signals.latency.observe(cand.deployment.id, ttfb)
         latency_ms = int((time.time() - ctx.started) * 1000)
         cost = await self.ledger.settle(
             res,

@@ -20,6 +20,7 @@ from aigw.db.session import Database
 from aigw.gateway import metrics
 from aigw.gateway.accounting import Ledger
 from aigw.gateway.ratelimit import CooldownStore, RateLimiter
+from aigw.gateway.signals import RoutingSignals
 from aigw.gateway.snapshot import SnapshotStore
 
 log = logging.getLogger("aigw")
@@ -56,6 +57,7 @@ def create_app(
         app.state.ledger = Ledger(app.state.db)
         app.state.limiter = RateLimiter(app.state.valkey, settings.ratelimit_fail_mode)
         app.state.cooldowns = CooldownStore(app.state.valkey)
+        app.state.signals = RoutingSignals.build(app.state.valkey, settings.routing_ewma_alpha)
         app.state.secrets = secrets or SecretResolver()
         app.state.oidc = OIDCVerifier(settings, oidc_http_client) if settings.oidc_issuer else None
         from aigw.gateway.pipeline import Pipeline
@@ -68,6 +70,7 @@ def create_app(
             limiter=app.state.limiter,
             cooldowns=app.state.cooldowns,
             secrets=app.state.secrets,
+            signals=app.state.signals,
         )
         if settings.role in ("gateway", "all"):
             await app.state.snapshots.start()

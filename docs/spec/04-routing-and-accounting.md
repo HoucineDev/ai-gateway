@@ -52,9 +52,24 @@ Reservation before the first upstream byte means budget enforcement is strict un
 Input: logical model, request, key scope, config snapshot, health state.
 
 1. Candidates = active deployments of the model, `cooldown_until < now`, capabilities satisfy the request (streaming, tools, json mode, vision, `max_input_tokens >= est_prompt`), region satisfies key/project residency tag if set.
-2. Group by `priority` ascending; within the best group choose weighted-random by `weight` (Phase 1). Phase 2 adds latency-EWMA and vLLM queue-pressure inputs (`GPU-aware routing`).
+2. Group by `priority` ascending; within a group draw weighted-random by `weight` (`AIGW_ROUTING_STRATEGY=weighted`) or by the signal-adjusted weight of §5.1 (`adaptive`, default). Local admission control: a deployment whose `capabilities.max_concurrency` is reached on this replica is rejected with reason `saturated`.
 3. Ordered fallback list = remaining candidates in the same order rule.
 4. None eligible → 503 `no_eligible_deployment` with the reasons per deployment in the diagnostics record (never in the client body beyond a summary).
+
+### 5.1 Adaptive ordering (latency EWMA, queue pressure, in-flight load)
+
+Each candidate's draw weight is `weight / (1 + ttfb_ewma/latency_ref) / (1 + queue_waiting/queue_ref) / (1 + inflight/inflight_ref)`:
+
+| Signal | Source | Scope |
+|--------|--------|-------|
+| `ttfb_ewma` | EWMA (`AIGW_ROUTING_EWMA_ALPHA`, default 0.2) of time-to-first-byte of successful attempts, fed by the pipeline at settlement | per gateway replica, in-process |
+| `queue_waiting` | vLLM `/metrics` (`vllm:num_requests_waiting`, summed over label sets) scraped by the worker in its health sweep for deployments with `capabilities.engine = "vllm"` (URL derived from `base_url` minus `/v1`) or an explicit `capabilities.metrics_url`; stored in `deployment_health` and published to Valkey `dq:{deployment_id}` with a TTL of 3 sweeps | fleet-wide via Valkey; absent when Valkey is down |
+| `inflight` | requests this replica currently has open on the deployment (`capabilities.max_concurrency` is the reference when set) | per replica, in-process — admission control stays local by design |
+
+References (`AIGW_ROUTING_LATENCY_REF_MS` 1000, `AIGW_ROUTING_QUEUE_REF` 8, `AIGW_ROUTING_INFLIGHT_REF` 4) are the
+load at which a signal halves the weight. Ordering stays a weighted-random draw (never a hard argmin) so a slow but
+healthy deployment keeps receiving a trickle and its EWMA can recover. The diagnostics record stores `strategy` and,
+per candidate, `ttfb_ms`, `queue_waiting`, `inflight`, `weight`, `score` (routing explanations, docs/spec/07).
 
 ## 6. Retries, cooldown and fallback
 

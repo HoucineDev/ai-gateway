@@ -198,7 +198,8 @@ function Health({ h }: { h: Deployment["health"] }) {
   if (!h || h.status === "unknown") return <span className="text-xs text-muted-foreground" title="Not probed yet (worker not running?)">not probed</span>;
   const tone = h.status === "healthy" ? "bg-accent" : h.status === "degraded" ? "bg-warning" : "bg-destructive";
   const ago = h.checked_at ? `${Math.max(0, Math.round((Date.now() - new Date(h.checked_at).getTime()) / 1000))}s ago` : "";
-  const detail = h.status === "healthy" ? `${h.latency_ms ?? "—"} ms` : `${h.error ?? "failing"} ×${h.consecutive_failures}`;
+  const queue = h.queue_waiting !== null ? ` · queue ${h.queue_waiting}${h.kv_cache_usage !== null ? ` · kv ${Math.round(h.kv_cache_usage * 100)}%` : ""}` : "";
+  const detail = (h.status === "healthy" ? `${h.latency_ms ?? "—"} ms` : `${h.error ?? "failing"} ×${h.consecutive_failures}`) + queue;
   return (
     <span className="inline-flex items-center gap-2 text-xs" title={`${h.status} · checked ${ago}`}>
       <span className={`inline-block h-2 w-2 rounded-full ${tone}`} aria-hidden="true" />

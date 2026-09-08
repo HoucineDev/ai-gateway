@@ -55,7 +55,8 @@ Price resolution: newest `version` whose `effective_from <= now()` for `(provide
 
 ```
 deployment_health(deployment_id PK→deployments ON DELETE CASCADE, status ENUM(healthy, degraded, unhealthy, unknown),
-       consecutive_failures INT, latency_ms INT NULL, error TEXT NULL, checked_at TIMESTAMPTZ NULL)
+       consecutive_failures INT, latency_ms INT NULL, error TEXT NULL, checked_at TIMESTAMPTZ NULL,
+       queue_waiting INT NULL, queue_running INT NULL, kv_cache_usage FLOAT NULL, metrics_at TIMESTAMPTZ NULL)
 ```
 
 Written only by the worker's active health checks (docs/spec/04 §6); never part of the gateway snapshot.

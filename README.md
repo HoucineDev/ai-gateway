@@ -69,6 +69,11 @@ Active health checks (docs/spec/04 §6): the worker probes every active deployme
 the result in `deployment_health` (shown in the catalog's *Health* column), and after two consecutive failures cools
 the deployment down through Valkey so the router skips it before any client request fails; recovery lifts it at once.
 
+Adaptive routing (docs/spec/04 §5.1): inside a priority group the draw weight of each deployment is scaled down by its
+time-to-first-byte EWMA, by the vLLM queue depth the worker scrapes from `/metrics` (`capabilities.engine: "vllm"`),
+and by the requests this replica already has in flight; `capabilities.max_concurrency` is a hard local admission
+limit. Every decision is explained in the request diagnostics (per-candidate signals and scores).
+
 Point a real deployment at your vLLM/KServe endpoint through the control API:
 
 ```bash

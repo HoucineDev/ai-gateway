@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from datetime import UTC, datetime
 
@@ -25,6 +26,7 @@ from aigw.core.errors import GatewayError
 from aigw.core.secrets import SecretResolver
 from aigw.db.models import Deployment, DeploymentHealth
 from aigw.gateway.ratelimit import CooldownStore
+from aigw.gateway.signals import Pressure, PressureStore
 
 log = logging.getLogger("aigw.worker.health")
 
@@ -51,6 +53,8 @@ class HealthChecker:
         self.timeout = float(settings.health_check_timeout_seconds)
         self.threshold = int(settings.health_failure_threshold)
         self.cooldown_seconds = float(settings.health_cooldown_seconds)
+        self.pressure = PressureStore(cooldowns.client)
+        self.pressure_ttl = max(3 * float(settings.health_check_interval_seconds), 30.0)
         self._sem = asyncio.Semaphore(concurrency)
 
     # ---- probing --------------------------------------------------------
@@ -88,6 +92,36 @@ class HealthChecker:
             return False, latency, f"http_{r.status_code}"
         return True, latency, None
 
+    # ---- queue pressure (vLLM /metrics, docs/spec/04 §5.1) ---------------
+
+    @staticmethod
+    def metrics_url(d: Deployment) -> str | None:
+        caps = d.capabilities or {}
+        if caps.get("metrics_url"):
+            return str(caps["metrics_url"])
+        if caps.get("engine") == "vllm" and d.base_url:
+            base = d.base_url.rstrip("/")
+            if base.endswith("/v1"):
+                base = base[:-3]
+            return f"{base}/metrics"
+        return None
+
+    async def scrape(self, d: Deployment) -> Pressure | None:
+        url = self.metrics_url(d)
+        if not url:
+            return None
+        try:
+            async with self._sem:
+                r = await self.http.get(url, timeout=self.timeout)
+            if r.status_code != 200:
+                return None
+            m = parse_vllm_metrics(r.text)
+        except (httpx.HTTPError, ValueError):
+            return None
+        if m is None:
+            return None
+        return Pressure(m["waiting"], m["running"], m.get("kv_cache_usage"), time.time())
+
     # ---- one sweep ------------------------------------------------------
 
     async def run_once(self) -> dict[str, str]:
@@ -95,10 +129,11 @@ class HealthChecker:
         async with self.db.session() as s:
             deployments = list((await s.execute(select(Deployment).where(Deployment.status == "active"))).scalars())
         results = await asyncio.gather(*(self.probe(d) for d in deployments))
+        pressures = await asyncio.gather(*(self.scrape(d) for d in deployments))
         statuses: dict[str, str] = {}
         now = datetime.now(UTC)
         async with self.db.tx() as s:
-            for d, (ok, latency, error) in zip(deployments, results, strict=True):
+            for d, (ok, latency, error), pressure in zip(deployments, results, pressures, strict=True):
                 row = await s.get(DeploymentHealth, d.id)
                 if row is None:
                     row = DeploymentHealth(deployment_id=d.id, consecutive_failures=0, status="unknown")
@@ -111,6 +146,12 @@ class HealthChecker:
                     row.consecutive_failures += 1
                     row.status = UNHEALTHY if row.consecutive_failures >= self.threshold else DEGRADED
                 row.checked_at, row.latency_ms, row.error = now, latency, error
+                if pressure is not None:
+                    row.queue_waiting, row.queue_running = pressure.waiting, pressure.running
+                    row.kv_cache_usage, row.metrics_at = pressure.kv_cache_usage, now
+                    await self.pressure.publish(str(d.id), pressure, self.pressure_ttl)
+                elif self.metrics_url(d) is not None:
+                    row.queue_waiting = row.queue_running = row.kv_cache_usage = None  # scrape failed: unknown
                 statuses[str(d.id)] = row.status
                 await self._apply(d, row, previous)
         return statuses
@@ -130,3 +171,34 @@ class HealthChecker:
         elif row.status == HEALTHY and previous == UNHEALTHY:
             await self.cooldowns.clear(did)
             log.info("deployment %s (%s) recovered (%s ms)", d.name, did, row.latency_ms)
+
+
+_SAMPLE = re.compile(r"^([A-Za-z_:][A-Za-z0-9_:]*)(\{[^}]*\})?\s+([-+0-9.eE]+|NaN|[+-]Inf)\s*$")
+
+
+def parse_vllm_metrics(text: str) -> dict | None:
+    """Sum vLLM queue gauges over their label sets (one deployment may serve several model names).
+
+    Returns None when the text carries no vLLM queue metric at all (not a vLLM server)."""
+    waiting = running = None
+    kv: float | None = None
+    for line in text.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        m = _SAMPLE.match(line.strip())
+        if not m:
+            continue
+        name, value = m.group(1), m.group(3)
+        try:
+            v = float(value)
+        except ValueError:
+            continue
+        if name == "vllm:num_requests_waiting":
+            waiting = (waiting or 0) + v
+        elif name == "vllm:num_requests_running":
+            running = (running or 0) + v
+        elif name in ("vllm:gpu_cache_usage_perc", "vllm:kv_cache_usage_perc"):
+            kv = max(kv or 0.0, v)
+    if waiting is None and running is None:
+        return None
+    return {"waiting": int(waiting or 0), "running": int(running or 0), "kv_cache_usage": kv}

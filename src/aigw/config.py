@@ -38,6 +38,30 @@ class Settings(BaseSettings):
     health_failure_threshold: int = 2  # consecutive failed probes before the deployment is cooled down
     health_cooldown_seconds: float = 90.0  # refreshed each sweep while unhealthy; cleared on recovery
 
+    # Routing (docs/spec/04 §5.1): weighted = configured weights only; adaptive = weights scaled by latency EWMA,
+    # vLLM queue pressure and in-flight load. References are the load at which a signal halves a candidate's weight.
+    routing_strategy: Literal["weighted", "adaptive"] = "adaptive"
+    routing_ewma_alpha: float = 0.2
+    routing_latency_ref_ms: float = 1000.0
+    routing_queue_ref: float = 8.0
+    routing_inflight_ref: float = 4.0
+
+    # Routing (docs/spec/04 §5.1): weighted = configured weights only; adaptive = weights scaled by latency EWMA,
+    # vLLM queue pressure and in-flight load. References are the load at which a signal halves a candidate's weight.
+    routing_strategy: Literal["weighted", "adaptive"] = "adaptive"
+    routing_ewma_alpha: float = 0.2
+    routing_latency_ref_ms: float = 1000.0
+    routing_queue_ref: float = 8.0
+    routing_inflight_ref: float = 4.0
+
+    # Routing (docs/spec/04 §5.1): weighted = configured weights only; adaptive = weights scaled by latency EWMA,
+    # vLLM queue pressure and in-flight load. References are the load at which a signal halves a candidate's weight.
+    routing_strategy: Literal["weighted", "adaptive"] = "adaptive"
+    routing_ewma_alpha: float = 0.2
+    routing_latency_ref_ms: float = 1000.0
+    routing_queue_ref: float = 8.0
+    routing_inflight_ref: float = 4.0
+
     config_refresh_seconds: float = 5.0
     config_max_staleness_seconds: float = 300.0
     ratelimit_fail_mode: Literal["open", "closed"] = "open"

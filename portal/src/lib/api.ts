@@ -13,6 +13,7 @@ export type Key = {
 export type DeploymentHealth = {
   status: "healthy" | "degraded" | "unhealthy" | "unknown"; consecutive_failures: number; latency_ms: number | null;
   error: string | null; checked_at: string | null;
+  queue_waiting: number | null; queue_running: number | null; kv_cache_usage: number | null; metrics_at: string | null; // vLLM /metrics
 };
 export type Deployment = {
   id: string; model_id: string; name: string; provider: string; provider_model: string; base_url: string | null;

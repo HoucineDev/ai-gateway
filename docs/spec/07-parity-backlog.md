@@ -39,11 +39,11 @@ Feature families from the proposal's reference inventory, with the phase in whic
 | Capability-aware eligibility (tools, json, vision, context) | P1 | |
 | Retries, cooldowns, fallback chains, no post-first-byte failover | P1 | |
 | Active health checks | P2 ✓ | worker probe → `deployment_health` + Valkey cooldown (docs/spec/04 §6, `tests/test_health.py`) |
-| Latency-EWMA and vLLM queue-pressure routing (GPU-aware) | P2 | reads vLLM `/metrics`; admission control stays local |
+| Latency-EWMA and vLLM queue-pressure routing (GPU-aware) | P2 ✓ | docs/spec/04 §5.1; worker scrapes vLLM `/metrics` → Valkey; in-flight admission control local per replica (`tests/test_routing_adaptive.py`) |
 | Budget-, tag-, priority-based routing | P3 | |
 | Exact response cache (tenant/policy scoped) | P2 | |
 | Semantic cache (opt-in, single-turn) | P4 | |
-| Routing explanations and policy simulation (differentiator) | P3 | diagnostics record already stores the decision |
+| Routing explanations and policy simulation (differentiator) | P3 (explanations ✓) | diagnostics record stores candidates, rejections and per-candidate signals/scores; simulation P3 |
 | Multi-region config distribution | P4 | |
 
 ## APIs

@@ -81,6 +81,8 @@ All variables are `AIGW_*` (full table: `docs/spec/05-deployment.md` §4). Most 
 | `AIGW_CONFIG_REFRESH_SECONDS`, `AIGW_CONFIG_MAX_STALENESS_SECONDS` | snapshot poll and fail-closed bound |
 | `AIGW_RATELIMIT_FAIL_MODE` | open / closed when Valkey is down |
 | `AIGW_HEALTH_CHECK_INTERVAL_SECONDS`, `AIGW_HEALTH_FAILURE_THRESHOLD`, `AIGW_HEALTH_COOLDOWN_SECONDS` | active health checks: sweep interval (0 = off), failures before cooldown, cooldown length |
+| `AIGW_ROUTING_STRATEGY` | `adaptive` (default: weights × latency × queue × in-flight) or `weighted` (weights only, docs/spec/04 §5.1) |
+| `AIGW_ROUTING_LATENCY_REF_MS`, `AIGW_ROUTING_QUEUE_REF`, `AIGW_ROUTING_INFLIGHT_REF` | load at which each signal halves a deployment's draw weight (1000 ms, 8 queued, 4 in flight) |
 
 Provider credentials are secret references on deployments (`env:NAME`), never stored in the database.
 
@@ -91,7 +93,10 @@ Provider credentials are secret references on deployments (`env:NAME`), never st
 | Revoke a key immediately | portal → Organizations & keys → revoke, or `POST /admin/v1/keys/{id}/revoke`; lands on gateways within ~1 s via Valkey, worst case one refresh interval |
 | Rotate a key with grace | `POST /admin/v1/keys/{id}/rotate {"grace_seconds": 3600}` |
 | Take a deployment out of rotation | `POST /admin/v1/deployments/{id}/cooldown {"seconds": 600}` or PATCH `status: disabled` |
-| See upstream health | portal → Models & deployments → *Health* column (status, latency, error, failures), or `GET /admin/v1/models` → `deployments[].health` |
+| See upstream health | portal → Models & deployments → *Health* column (status, latency, error, failures, vLLM queue depth and KV-cache use), or `GET /admin/v1/models` → `deployments[].health` |
+| Make a vLLM deployment GPU-aware | set `capabilities: {"engine": "vllm"}` on the deployment (metrics URL derived from `base_url` minus `/v1`) or an explicit `"metrics_url"`; the worker scrapes it every health sweep |
+| Cap concurrent requests to one upstream per gateway replica | `capabilities: {"max_concurrency": N}`; beyond N the router rejects it with reason `saturated` and falls back to the next deployment |
+| Explain a routing decision | `GET /admin/v1/requests/{request_id}` → `attempts[].routing`: `strategy`, `candidates`, `rejected` (reason per deployment) and `signals` (per-candidate `ttfb_ms`, `queue_waiting`, `inflight`, `weight`, `score`) |
 | Raise a budget temporarily | `POST /admin/v1/budgets/{id}/temporary-increase {"amount": "50", "until": "<RFC3339>"}` |
 | Add a price version | `POST /admin/v1/prices` (insert-only, versioned by `effective_from`) |
 | Grant portal access (global) | assign realm role `aigw-admin` / `aigw-operator` / `aigw-viewer` in Keycloak; scopes take effect on the next token |
@@ -124,6 +129,8 @@ Provider credentials are secret references on deployments (`env:NAME`), never st
 | Portal shows *Sign in to continue* | no credential in this browser: sign in with Keycloak or paste the admin key in Settings |
 | Deployment shows *unhealthy* and requests avoid it | the worker's probe failed `AIGW_HEALTH_FAILURE_THRESHOLD` times (`error` says why: `timeout`, `transport: ConnectError`, `http_503`, `credential_missing`); fix the upstream or credential — the next healthy probe lifts the cooldown, or clear it by hand with `POST /deployments/{id}/cooldown {"seconds": 0}` (the worker will re-apply it while the probe keeps failing) |
 | Health column says *not probed* | the worker is not running or `AIGW_HEALTH_CHECK_INTERVAL_SECONDS=0`; check `docker compose logs worker` |
+| Traffic skews away from one deployment although it is healthy | adaptive routing: check its `signals` in a request's diagnostics (high `ttfb_ms`, `queue_waiting` or `inflight`); raise the matching `AIGW_ROUTING_*_REF` or set `AIGW_ROUTING_STRATEGY=weighted` to disable |
+| 503 `no_eligible_deployment` with reason `saturated` | this replica has `max_concurrency` requests open on every eligible deployment; raise the cap, add deployments or gateway replicas |
 
 ## 7. Change log of operational behaviour
 
@@ -139,3 +146,6 @@ Provider credentials are secret references on deployments (`env:NAME`), never st
 - 2026-09-08 — active health checks in the worker (docs/spec/04 §6): `deployment_health` table (migration
   `e1a97b43dd62`), `AIGW_HEALTH_*` settings, automatic cooldown/recovery through Valkey, `health` on
   `GET /admin/v1/models`, catalog *Health* column.
+- 2026-09-08 — adaptive routing (docs/spec/04 §5.1): latency EWMA, in-flight admission control
+  (`capabilities.max_concurrency`), vLLM queue pressure scraped by the worker (`capabilities.engine: vllm`,
+  migration `0b94f242d83b`), `AIGW_ROUTING_*` settings, per-candidate signals in request diagnostics.

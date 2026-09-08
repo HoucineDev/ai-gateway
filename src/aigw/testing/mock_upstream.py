@@ -189,6 +189,22 @@ async def embeddings(request: Request):
     }
 
 
+@mock.get("/metrics")
+async def metrics_endpoint():
+    """vLLM-shaped Prometheus text; steer with STATE['queue_waiting'] / ['queue_running'] / ['kv_cache']."""
+    from fastapi.responses import PlainTextResponse
+
+    w, r, kv = STATE.get("queue_waiting", 0), STATE.get("queue_running", 0), STATE.get("kv_cache", 0.0)
+    body = (
+        "# HELP vllm:num_requests_waiting Number of requests waiting to be processed.\n"
+        "# TYPE vllm:num_requests_waiting gauge\n"
+        f'vllm:num_requests_waiting{{model_name="mock-chat"}} {float(w)}\n'
+        f'vllm:num_requests_running{{model_name="mock-chat"}} {float(r)}\n'
+        f'vllm:gpu_cache_usage_perc{{model_name="mock-chat"}} {float(kv)}\n'
+    )
+    return PlainTextResponse(body, media_type="text/plain; version=0.0.4")
+
+
 @mock.get("/healthz")
 async def healthz():
     return {"status": "ok", "role": "mock-upstream"}

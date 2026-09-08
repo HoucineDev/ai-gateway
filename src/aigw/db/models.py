@@ -12,6 +12,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -176,6 +177,21 @@ class DeploymentHealth(Base):
     latency_ms: Mapped[int | None] = mapped_column(Integer)
     error: Mapped[str | None] = mapped_column(String(200))
     checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # vLLM queue pressure from /metrics (docs/spec/04 §5.1); NULL when the deployment exposes no metrics
+    queue_waiting: Mapped[int | None] = mapped_column(Integer)
+    queue_running: Mapped[int | None] = mapped_column(Integer)
+    kv_cache_usage: Mapped[float | None] = mapped_column(Float)
+    metrics_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # vLLM queue pressure from /metrics (docs/spec/04 §5.1); NULL when the deployment exposes no metrics
+    queue_waiting: Mapped[int | None] = mapped_column(Integer)
+    queue_running: Mapped[int | None] = mapped_column(Integer)
+    kv_cache_usage: Mapped[float | None] = mapped_column(Float)
+    metrics_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # vLLM queue pressure from /metrics (docs/spec/04 §5.1); NULL when the deployment exposes no metrics
+    queue_waiting: Mapped[int | None] = mapped_column(Integer)
+    queue_running: Mapped[int | None] = mapped_column(Integer)
+    kv_cache_usage: Mapped[float | None] = mapped_column(Float)
+    metrics_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Price(Base):
