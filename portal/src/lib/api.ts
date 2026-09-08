@@ -10,9 +10,14 @@ export type Key = {
   allowed_models: string[] | null; rpm_limit: number | null; tpm_limit: number | null; created_at: string; grace_until: string | null;
   key?: string;
 };
+export type DeploymentHealth = {
+  status: "healthy" | "degraded" | "unhealthy" | "unknown"; consecutive_failures: number; latency_ms: number | null;
+  error: string | null; checked_at: string | null;
+};
 export type Deployment = {
   id: string; model_id: string; name: string; provider: string; provider_model: string; base_url: string | null;
   credential_ref: string; weight: number; priority: number; status: string; cooldown_until: string | null; region: string | null;
+  health: DeploymentHealth | null; // latest active probe (docs/spec/04 §6); null until the worker has probed it
 };
 export type Model = {
   id: string; org_id: string | null; name: string; display_name: string | null; modalities: string[]; context_window: number | null;

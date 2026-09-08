@@ -166,6 +166,18 @@ class Deployment(Base):
     created_at: Mapped[datetime] = _created()
 
 
+class DeploymentHealth(Base):
+    """Latest active-probe result per deployment (docs/spec/04 §6); written by the worker, read by the portal."""
+
+    __tablename__ = "deployment_health"
+    deployment_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("deployments.id", ondelete="CASCADE"), primary_key=True)
+    status: Mapped[str] = mapped_column(String(20), default="unknown")  # healthy | degraded | unhealthy | unknown
+    consecutive_failures: Mapped[int] = mapped_column(Integer, default=0)
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    error: Mapped[str | None] = mapped_column(String(200))
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class Price(Base):
     __tablename__ = "prices"
     __table_args__ = (UniqueConstraint("provider", "provider_model", "version"),)

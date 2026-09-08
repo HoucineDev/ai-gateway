@@ -53,6 +53,13 @@ prices(id, provider, provider_model, version INT, effective_from TIMESTAMPTZ,
 
 Price resolution: newest `version` whose `effective_from <= now()` for `(provider, provider_model)`; a deployment may pin `capabilities.price_override_id`.
 
+```
+deployment_health(deployment_id PK→deployments ON DELETE CASCADE, status ENUM(healthy, degraded, unhealthy, unknown),
+       consecutive_failures INT, latency_ms INT NULL, error TEXT NULL, checked_at TIMESTAMPTZ NULL)
+```
+
+Written only by the worker's active health checks (docs/spec/04 §6); never part of the gateway snapshot.
+
 ## Budgets and ledger
 
 ```

@@ -9,7 +9,7 @@ Operational how-to for running, checking and troubleshooting the stack. Kept cur
 |-----------|------|--------------|--------|
 | gateway | OpenAI-compatible ingress `/v1/*` | 8080 | `GET /healthz`, `GET /readyz` (503 while config snapshot missing/stale) |
 | admin | control API `/admin/v1/*` + React portal at `/` | 8081 | `GET /healthz`; `GET /admin/v1/config/version` with a credential |
-| worker | outbox, reconciliation, key expiry | — | process logs |
+| worker | outbox, reconciliation, key expiry, active health checks | — | process logs (`health sweep: …`); catalog *Health* column in the portal |
 | PostgreSQL 16 | only stateful authority | 5432 (compose) | `pg_isready -U aigw` |
 | Valkey 8 | rate limits, cooldowns, key invalidation | 6379 | `redis-cli ping`; gateway degrades open/closed per `AIGW_RATELIMIT_FAIL_MODE` |
 | mock-upstream | OpenAI/Anthropic-compatible fake provider | 9000 | `GET /healthz` (also `GET /v1/models`) |
@@ -80,6 +80,7 @@ All variables are `AIGW_*` (full table: `docs/spec/05-deployment.md` §4). Most 
 | `AIGW_OIDC_ROLE_SCOPES` | JSON: Keycloak role → scope patterns (default admin `*`, operator catalog writes, viewer `*:read`) |
 | `AIGW_CONFIG_REFRESH_SECONDS`, `AIGW_CONFIG_MAX_STALENESS_SECONDS` | snapshot poll and fail-closed bound |
 | `AIGW_RATELIMIT_FAIL_MODE` | open / closed when Valkey is down |
+| `AIGW_HEALTH_CHECK_INTERVAL_SECONDS`, `AIGW_HEALTH_FAILURE_THRESHOLD`, `AIGW_HEALTH_COOLDOWN_SECONDS` | active health checks: sweep interval (0 = off), failures before cooldown, cooldown length |
 
 Provider credentials are secret references on deployments (`env:NAME`), never stored in the database.
 
@@ -90,6 +91,7 @@ Provider credentials are secret references on deployments (`env:NAME`), never st
 | Revoke a key immediately | portal → Organizations & keys → revoke, or `POST /admin/v1/keys/{id}/revoke`; lands on gateways within ~1 s via Valkey, worst case one refresh interval |
 | Rotate a key with grace | `POST /admin/v1/keys/{id}/rotate {"grace_seconds": 3600}` |
 | Take a deployment out of rotation | `POST /admin/v1/deployments/{id}/cooldown {"seconds": 600}` or PATCH `status: disabled` |
+| See upstream health | portal → Models & deployments → *Health* column (status, latency, error, failures), or `GET /admin/v1/models` → `deployments[].health` |
 | Raise a budget temporarily | `POST /admin/v1/budgets/{id}/temporary-increase {"amount": "50", "until": "<RFC3339>"}` |
 | Add a price version | `POST /admin/v1/prices` (insert-only, versioned by `effective_from`) |
 | Grant portal access (global) | assign realm role `aigw-admin` / `aigw-operator` / `aigw-viewer` in Keycloak; scopes take effect on the next token |
@@ -120,6 +122,8 @@ Provider credentials are secret references on deployments (`env:NAME`), never st
 | 503 `no_eligible_deployment` for a model that has deployments | every deployment is disabled, in cooldown (portal → Models & deployments → *Cooldown* column; the snowflake button sets 10 min, click again to clear, or `POST /deployments/{id}/cooldown {"seconds": 0}`) or lacks a capability the request needs (tools, json_schema, context window); `GET /admin/v1/requests/{request_id}` shows the rejection reasons when the request carried `X-AIGW-Request-Id` |
 | `docker ps` shows worker or mock-upstream *unhealthy* on images built before 2026-09-08 | the image default healthcheck probes :8080; rebuild (`docker compose up -d --build`) — worker now has no healthcheck, mock-upstream probes :9000 |
 | Portal shows *Sign in to continue* | no credential in this browser: sign in with Keycloak or paste the admin key in Settings |
+| Deployment shows *unhealthy* and requests avoid it | the worker's probe failed `AIGW_HEALTH_FAILURE_THRESHOLD` times (`error` says why: `timeout`, `transport: ConnectError`, `http_503`, `credential_missing`); fix the upstream or credential — the next healthy probe lifts the cooldown, or clear it by hand with `POST /deployments/{id}/cooldown {"seconds": 0}` (the worker will re-apply it while the probe keeps failing) |
+| Health column says *not probed* | the worker is not running or `AIGW_HEALTH_CHECK_INTERVAL_SECONDS=0`; check `docker compose logs worker` |
 
 ## 7. Change log of operational behaviour
 
@@ -132,3 +136,6 @@ Provider credentials are secret references on deployments (`env:NAME`), never st
   portal *Members* panel; new error codes `tenant_forbidden`, `rank_exceeded`, `role_scope_mismatch`.
 - 2026-09-08 — `GET /me` gains `global_scopes`; the portal hides global-only actions (new organization, global
   model, price, deployments on global models) from delegates.
+- 2026-09-08 — active health checks in the worker (docs/spec/04 §6): `deployment_health` table (migration
+  `e1a97b43dd62`), `AIGW_HEALTH_*` settings, automatic cooldown/recovery through Valkey, `health` on
+  `GET /admin/v1/models`, catalog *Health* column.

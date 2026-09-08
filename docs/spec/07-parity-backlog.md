@@ -38,7 +38,7 @@ Feature families from the proposal's reference inventory, with the phase in whic
 | Weighted/priority deployment selection | P1 | |
 | Capability-aware eligibility (tools, json, vision, context) | P1 | |
 | Retries, cooldowns, fallback chains, no post-first-byte failover | P1 | |
-| Active health checks | P2 | worker |
+| Active health checks | P2 ✓ | worker probe → `deployment_health` + Valkey cooldown (docs/spec/04 §6, `tests/test_health.py`) |
 | Latency-EWMA and vLLM queue-pressure routing (GPU-aware) | P2 | reads vLLM `/metrics`; admission control stays local |
 | Budget-, tag-, priority-based routing | P3 | |
 | Exact response cache (tenant/policy scoped) | P2 | |

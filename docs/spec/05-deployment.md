@@ -8,7 +8,7 @@ One container image, three roles selected by `AIGW_ROLE`:
 |------|--------|-----------|
 | `gateway` | `/v1/*`, `/healthz`, `/metrics` | concurrent streams / RPS |
 | `admin` | `/admin/v1/*` (control API; later the portal's backend) | admin traffic (small) |
-| `worker` | outbox consumer, pending-attempt reconciliation, budget period roll, soft alerts, (Phase 2) active health checks and exports | queue depth |
+| `worker` | outbox consumer, pending-attempt reconciliation, budget period roll, soft alerts, active health checks (docs/spec/04 §6), (Phase 2) exports | queue depth |
 
 A portal outage (admin role down) does not affect gateway traffic: the gateway reads its config snapshot straight from PostgreSQL and continues with the last snapshot if the database is briefly unavailable (bounded by `AIGW_CONFIG_MAX_STALENESS_SECONDS`, default 300, after which the gateway returns 503 for new requests rather than enforcing stale policy).
 
@@ -47,6 +47,8 @@ python scripts/oidc_smoke.py                   # end-to-end check: tokens → /a
 | `AIGW_OIDC_LEEWAY_SECONDS` | 30 | clock-skew tolerance on `exp`/`iat` |
 | `AIGW_OIDC_JWKS_CACHE_SECONDS`, `AIGW_OIDC_JWKS_MIN_REFRESH_SECONDS` | 3600, 30 | signing-key cache TTL; refetch cooldown on unknown `kid` |
 | `AIGW_CONFIG_REFRESH_SECONDS` | 5 | snapshot poll |
+| `AIGW_HEALTH_CHECK_INTERVAL_SECONDS`, `AIGW_HEALTH_CHECK_TIMEOUT_SECONDS` | 30, 5 | worker active health checks (docs/spec/04 §6); 0 disables |
+| `AIGW_HEALTH_FAILURE_THRESHOLD`, `AIGW_HEALTH_COOLDOWN_SECONDS` | 2, 90 | consecutive failed probes before cooldown; cooldown length (refreshed while down) |
 | `AIGW_CONFIG_MAX_STALENESS_SECONDS` | 300 | fail-closed bound |
 | `AIGW_RATELIMIT_FAIL_MODE` | open | open / closed when Valkey unavailable |
 | `AIGW_MAX_ATTEMPTS` | 3 | per request |

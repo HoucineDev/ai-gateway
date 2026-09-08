@@ -73,7 +73,7 @@ Rules:
 - Fallback is only attempted while **no client-visible byte** has been sent. Once streaming starts, an upstream failure ends the stream with an error event; the attempt is `ambiguous` unless usage was received.
 - Every attempt is its own `request_attempts` row and its own reservation: the previous attempt's reservation is released (settled at 0 or at reported usage) before the next one is reserved. Max attempts per request: `AIGW_MAX_ATTEMPTS` (default 3).
 - Cooldown state lives in Valkey (`cd:{deployment_id}` with TTL) and is mirrored in-process; persistent operator cooldowns use `deployments.cooldown_until`.
-- Health: passive (error classes above). Active health checks (`GET /models` or a 1-token request) are a worker job in Phase 2.
+- Health: passive (error classes above) plus active checks (§6).
 
 ## 7. Streaming guarantees
 
@@ -85,3 +85,18 @@ Rules:
 ## 8. Observability
 
 Per request: structured log line (request_id, key_id, org/project, model, deployment, status, tokens, cost, latency, ttfb) with content excluded by default; OpenTelemetry span per pipeline stage; Prometheus counters/histograms `aigw_requests_total{model,provider,status}`, `aigw_request_latency_seconds`, `aigw_ttfb_seconds`, `aigw_tokens_total{direction}`, `aigw_cost_total`, `aigw_budget_rejections_total`, `aigw_deployment_cooldowns_total`.
+
+## 6. Active health checks (worker)
+
+Every `AIGW_HEALTH_CHECK_INTERVAL_SECONDS` (default 30; 0 disables) the worker probes each *active* deployment with an
+authenticated `GET {base_url}/models` (Anthropic: `/v1/models`) using the deployment's credential reference and extra
+headers, bounded by `AIGW_HEALTH_CHECK_TIMEOUT_SECONDS`. Transport errors, timeouts, an unresolvable credential and
+5xx answers are failures; any other status means the upstream is reachable (servers without `/models` answer 404).
+
+Results land in `deployment_health` (docs/spec/02): `status` healthy | degraded (failing, below threshold) |
+unhealthy, `consecutive_failures`, `latency_ms`, `error`, `checked_at`. After `AIGW_HEALTH_FAILURE_THRESHOLD`
+consecutive failures the worker sets the deployment's Valkey cooldown (`cd:{id}`, `AIGW_HEALTH_COOLDOWN_SECONDS`,
+refreshed each sweep while it stays down), which the router already honours (§4, rejection reason `cooldown`); a
+healthy probe clears it immediately. PostgreSQL remains the authority; Valkey only carries the signal to gateways,
+so with Valkey down health is still recorded and visible but does not steer routing (same fail-open stance as rate
+limits). `GET /admin/v1/models` returns each deployment's latest `health`; the portal shows it in the catalog.

@@ -1,7 +1,7 @@
 import { useState, type ChangeEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Snowflake, Power } from "lucide-react";
-import { ApiError, api, type Model } from "../lib/api";
+import { ApiError, api, type Model, type Deployment } from "../lib/api";
 import { useSession } from "../lib/session";
 import { Badge, Empty, ErrorBanner, Field, Loading, Modal, Page, TableWrap } from "../components/ui";
 
@@ -41,7 +41,7 @@ export default function Catalog() {
           {m.deployments.length === 0 ? <p className="text-sm text-muted-foreground">No deployments — requests to this model will get 503.</p> : (
             <div className="overflow-x-auto">
               <table className="table">
-                <thead><tr><th>Name</th><th>Provider</th><th>Provider model</th><th>Base URL</th><th>Prio</th><th>Weight</th><th>Status</th><th>Cooldown</th><th><span className="sr-only">Actions</span></th></tr></thead>
+                <thead><tr><th>Name</th><th>Provider</th><th>Provider model</th><th>Base URL</th><th>Prio</th><th>Weight</th><th>Status</th><th>Health</th><th>Cooldown</th><th><span className="sr-only">Actions</span></th></tr></thead>
                 <tbody>
                   {m.deployments.map((d) => {
                     const cooling = d.cooldown_until && new Date(d.cooldown_until) > new Date();
@@ -54,6 +54,7 @@ export default function Catalog() {
                         <td className="tabular-nums">{d.priority}</td>
                         <td className="tabular-nums">{d.weight}</td>
                         <td><Badge value={d.status} /></td>
+                        <td><Health h={d.health} /></td>
                         <td className="text-xs text-muted-foreground">{cooling ? `until ${new Date(d.cooldown_until!).toLocaleTimeString()}` : "—"}</td>
                         <td className="whitespace-nowrap text-right">
                           {canWriteModel(m) && <>
@@ -189,5 +190,19 @@ function PriceForm({ open, onClose }: { open: boolean; onClose: () => void }) {
         <div className="flex justify-end gap-2"><button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button><button className="btn btn-primary" disabled={m.isPending}>Add</button></div>
       </form>
     </Modal>
+  );
+}
+
+/** Active health probe result (worker, docs/spec/04 §6). Unhealthy deployments are cooled down automatically. */
+function Health({ h }: { h: Deployment["health"] }) {
+  if (!h || h.status === "unknown") return <span className="text-xs text-muted-foreground" title="Not probed yet (worker not running?)">not probed</span>;
+  const tone = h.status === "healthy" ? "bg-accent" : h.status === "degraded" ? "bg-warning" : "bg-destructive";
+  const ago = h.checked_at ? `${Math.max(0, Math.round((Date.now() - new Date(h.checked_at).getTime()) / 1000))}s ago` : "";
+  const detail = h.status === "healthy" ? `${h.latency_ms ?? "—"} ms` : `${h.error ?? "failing"} ×${h.consecutive_failures}`;
+  return (
+    <span className="inline-flex items-center gap-2 text-xs" title={`${h.status} · checked ${ago}`}>
+      <span className={`inline-block h-2 w-2 rounded-full ${tone}`} aria-hidden="true" />
+      <span className={h.status === "healthy" ? "text-muted-foreground" : h.status === "degraded" ? "text-warning" : "text-destructive"}>{h.status} · {detail}</span>
+    </span>
   );
 }

@@ -134,6 +134,15 @@ class CooldownStore:
             except (redis.RedisError, OSError):
                 pass
 
+    async def clear(self, deployment_id: str) -> None:
+        """Lift a cooldown (active health check recovery)."""
+        self._local.pop(deployment_id, None)
+        if self.client:
+            try:
+                await self.client.delete(f"cd:{deployment_id}")
+            except (redis.RedisError, OSError):
+                pass
+
     def record_failure(self, deployment_id: str) -> int:
         self._failures[deployment_id] = self._failures.get(deployment_id, 0) + 1
         return self._failures[deployment_id]

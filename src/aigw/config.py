@@ -32,6 +32,12 @@ class Settings(BaseSettings):
         }
     )
 
+    # Active health checks (worker; docs/spec/04 §6). 0 disables.
+    health_check_interval_seconds: float = 30.0
+    health_check_timeout_seconds: float = 5.0
+    health_failure_threshold: int = 2  # consecutive failed probes before the deployment is cooled down
+    health_cooldown_seconds: float = 90.0  # refreshed each sweep while unhealthy; cleared on recovery
+
     config_refresh_seconds: float = 5.0
     config_max_staleness_seconds: float = 300.0
     ratelimit_fail_mode: Literal["open", "closed"] = "open"

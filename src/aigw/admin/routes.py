@@ -32,6 +32,7 @@ from aigw.db.models import (
     AuditEvent,
     Budget,
     Deployment,
+    DeploymentHealth,
     Model,
     Organization,
     Price,
@@ -410,10 +411,23 @@ async def list_models(
         if org_id:
             q = q.where((Model.org_id == parse_uuid(org_id)) | (Model.org_id.is_(None)))
         models = list((await s.execute(q.order_by(Model.name))).scalars())
-        deps = (await s.execute(select(Deployment).where(Deployment.model_id.in_([m.id for m in models])))).scalars()
+        deps = list(
+            (await s.execute(select(Deployment).where(Deployment.model_id.in_([m.id for m in models])))).scalars()
+        )
+        health = {
+            h.deployment_id: h
+            for h in (
+                await s.execute(
+                    select(DeploymentHealth).where(DeploymentHealth.deployment_id.in_([d.id for d in deps]))
+                )
+            ).scalars()
+        }
         by_model: dict[uuid.UUID, list] = {}
         for d in deps:
-            by_model.setdefault(d.model_id, []).append(to_dict(d))
+            h = health.get(d.id)
+            by_model.setdefault(d.model_id, []).append(
+                {**to_dict(d), "health": {k: v for k, v in to_dict(h).items() if k != "deployment_id"} if h else None}
+            )
         return {"data": [{**to_dict(m), "deployments": by_model.get(m.id, [])} for m in models]}
 
 

@@ -312,6 +312,11 @@ async def always_429():
     )
 
 
+@mock.get("/always500/v1/models")
+async def always_500_models():
+    return JSONResponse({"error": {"message": "boom", "type": "server_error"}}, status_code=500)
+
+
 @mock.post("/always500/v1/chat/completions")
 async def always_500():
     return JSONResponse({"error": {"message": "boom", "type": "server_error"}}, status_code=500)

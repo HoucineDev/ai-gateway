@@ -55,7 +55,7 @@ All write operations produce an append-only `audit_events` row with actor, actio
 | teams | `POST /organizations/{org}/teams`, `GET/PATCH /teams/{id}` | |
 | projects | `POST /teams/{team}/projects`, `GET/PATCH /projects/{id}` | |
 | keys | `POST /projects/{project}/keys` → returns plaintext once; `GET /keys/{id}`; `POST /keys/{id}/revoke`; `POST /keys/{id}/rotate` (grace period) | stored as SHA-256 hash + prefix |
-| models | `POST/GET /models`, `PATCH /models/{id}` | logical models; `org_id` null = global |
+| models | `POST/GET /models`, `PATCH /models/{id}` | logical models; `org_id` null = global; each deployment carries its latest active-probe `health` (docs/spec/04 §6) |
 | deployments | `POST /models/{model}/deployments`, `PATCH /deployments/{id}`, `POST /deployments/{id}/cooldown` | credential is a secret reference (`env:NAME` in alpha, `openbao:path#key` later) |
 | prices | `POST/GET /prices` | insert-only, versioned by `effective_from` |
 | budgets | `POST /budgets`, `GET /budgets?scope_type&scope_id`, `PATCH /budgets/{id}`, `POST /budgets/{id}/temporary-increase` | scope: organization/team/project/key |

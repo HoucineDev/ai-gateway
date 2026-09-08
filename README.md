@@ -65,6 +65,10 @@ or *project member* of one tenant (`POST /admin/v1/role-bindings`, or the *Membe
 Every control-API route checks the target tenant, and lists are filtered, so a delegate never sees or touches
 another organization. Bindings match the token's `sub`, username or email and take effect on the next request.
 
+Active health checks (docs/spec/04 §6): the worker probes every active deployment (`GET …/models`) every 30 s, records
+the result in `deployment_health` (shown in the catalog's *Health* column), and after two consecutive failures cools
+the deployment down through Valkey so the router skips it before any client request fails; recovery lifts it at once.
+
 Point a real deployment at your vLLM/KServe endpoint through the control API:
 
 ```bash

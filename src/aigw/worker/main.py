@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import UTC, datetime
 
 from sqlalchemy import select, update
@@ -17,10 +18,12 @@ log = logging.getLogger("aigw.worker")
 
 
 class Worker:
-    def __init__(self, db: Database, settings: Settings):
+    def __init__(self, db: Database, settings: Settings, health=None):
         self.db = db
         self.settings = settings
         self.ledger = Ledger(db)
+        self.health = health  # HealthChecker (docs/spec/04 §6) or None when disabled
+        self._health_last = float("-inf")
         self.handlers = {"budget.soft_alert": self.on_soft_alert, "usage.settled": self.on_usage_settled}
 
     async def run_forever(self, interval: float = 5.0) -> None:
@@ -38,7 +41,19 @@ class Worker:
         expired = await self.expire_keys()
         if reconciled or expired:
             log.info("reconciled=%d expired_keys=%d", reconciled, expired)
-        return {"outbox": processed, "reconciled": reconciled, "expired_keys": expired}
+        probed = await self.maybe_check_health()
+        return {"outbox": processed, "reconciled": reconciled, "expired_keys": expired, "health_probed": probed}
+
+    async def maybe_check_health(self) -> int:
+        interval = float(self.settings.health_check_interval_seconds)
+        if self.health is None or interval <= 0 or time.monotonic() - self._health_last < interval:
+            return 0
+        self._health_last = time.monotonic()
+        statuses = await self.health.run_once()
+        bad = [k for k, v in statuses.items() if v != "healthy"]
+        if bad:
+            log.info("health sweep: %d deployments, %d not healthy", len(statuses), len(bad))
+        return len(statuses)
 
     async def process_outbox(self, batch: int = 200) -> int:
         n = 0
@@ -100,9 +115,29 @@ async def main() -> None:
     settings = get_settings()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     db = Database(settings.database_url)
+    health = None
+    http = None
+    if settings.health_check_interval_seconds > 0:
+        import httpx
+        import redis.asyncio as redis
+
+        from aigw.adapters.registry import AdapterRegistry
+        from aigw.core.secrets import SecretResolver
+        from aigw.gateway.ratelimit import CooldownStore
+        from aigw.worker.health import HealthChecker
+
+        http = httpx.AsyncClient(timeout=settings.health_check_timeout_seconds)
+        valkey = (
+            redis.from_url(settings.valkey_url, socket_connect_timeout=1, socket_timeout=1)
+            if settings.valkey_url
+            else None
+        )
+        health = HealthChecker(db, settings, AdapterRegistry(http), SecretResolver(), CooldownStore(valkey), http)
     try:
-        await Worker(db, settings).run_forever()
+        await Worker(db, settings, health).run_forever()
     finally:
+        if http is not None:
+            await http.aclose()
         await db.dispose()
 
 
