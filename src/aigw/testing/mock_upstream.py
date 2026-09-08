@@ -559,6 +559,25 @@ async def metrics_endpoint():
     return PlainTextResponse(body, media_type="text/plain; version=0.0.4")
 
 
+@mock.post("/guardrail")
+async def guardrail(request: Request):
+    """HTTP detector contract (docs/spec/04 §11): flags "[unsafe]", 500s on "[guarderr]", stalls on "[slowguard]"."""
+    body = await request.json()
+    text = body.get("text", "")
+    STATE["guardrail_calls"] = STATE.get("guardrail_calls", 0) + 1
+    STATE["last_guardrail"] = body
+    if "[guarderr]" in text:
+        return JSONResponse({"message": "detector down"}, status_code=500)
+    if "[slowguard]" in text:
+        await asyncio.sleep(2)
+    flagged = "[unsafe]" in text
+    return {
+        "flagged": flagged,
+        "categories": ["violence"] if flagged else [],
+        "redacted_text": text.replace("[unsafe]", "[REDACTED]") if flagged else None,
+    }
+
+
 @mock.get("/healthz")
 async def healthz():
     return {"status": "ok", "role": "mock-upstream"}

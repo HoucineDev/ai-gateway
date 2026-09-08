@@ -71,6 +71,13 @@ invoice_lines(id, invoice_id→invoices ON DELETE CASCADE, provider_model, day D
 
 Provider bills reconciled against settled usage (docs/spec/04 §10); never part of the gateway snapshot.
 
+```
+guardrail_events(id, request_id, org_id, team_id, project_id, key_id, direction ENUM(pre, post), detector, action ENUM(block, redact, flag, error),
+         categories TEXT[], detail JSONB, latency_ms INT NULL)          INDEX(request_id), INDEX(project_id, created_at)
+```
+
+Guardrail audit trail (docs/spec/04 §11); written by the gateway on every detector outcome.
+
 ## Budgets and ledger
 
 ```

@@ -11,6 +11,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import func, select
 
@@ -19,6 +20,7 @@ from aigw.core.pricing import PriceCard
 from aigw.db.models import ConfigVersion, Deployment, Model, Price, Project, VirtualKey
 from aigw.db.session import Database
 from aigw.gateway.cache import CachePolicy
+from aigw.gateway.guardrails import GuardrailPolicy
 
 log = logging.getLogger(__name__)
 
@@ -40,6 +42,8 @@ class KeyScope:
     project_tpm_limit: int | None = None
     cache_ttl_seconds: int = 0  # projects.settings.cache (docs/spec/04 §9); 0 = cache off
     cache_deterministic_only: bool = False
+    guardrails: Any = None  # GuardrailPolicy from projects.settings.guardrails (docs/spec/04 §11)
+    guardrails_error: str | None = None  # invalid policy → the project fails closed
     cache_ttl_seconds: int = 0  # projects.settings.cache (docs/spec/04 §9); 0 = cache off
     cache_deterministic_only: bool = False
 
@@ -162,6 +166,7 @@ class SnapshotStore:
                 allowed_tags=settings.get("allowed_tags"),
                 cache_ttl_seconds=(cache.ttl_seconds if (cache := CachePolicy.from_project_settings(settings)) else 0),
                 cache_deterministic_only=bool(cache and cache.deterministic_only),
+                **_guardrails(settings),
                 project_rpm_limit=settings.get("rpm_limit"),
                 project_tpm_limit=settings.get("tpm_limit"),
             )
@@ -229,3 +234,11 @@ class SnapshotStore:
                 reasoning_per_million=Decimal(p.reasoning_per_million) if p.reasoning_per_million is not None else None,
             )
         return Snapshot(version=version, loaded_at=time.time(), keys_by_hash=keys, models=models, prices=prices)
+
+
+def _guardrails(settings: dict) -> dict:
+    try:
+        return {"guardrails": GuardrailPolicy.from_project_settings(settings), "guardrails_error": None}
+    except ValueError as exc:
+        log.warning("invalid guardrail policy: %s", exc)
+        return {"guardrails": None, "guardrails_error": str(exc)}

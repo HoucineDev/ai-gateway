@@ -70,6 +70,7 @@ All write operations produce an append-only `audit_events` row with actor, actio
 | config | `GET /config/version` | monotonically increasing version the gateway polls |
 | me | `GET /me` | caller identity: `actor_type`, `actor_id`, `roles`, effective `scopes`, `global_scopes` (unrestricted by tenant), delegated `grants` |
 | auth | `GET /auth/config` | unauthenticated: `{admin_key: bool, oidc: {issuer, client_id, audience} | null}` for the portal's login flow |
+| guardrail-events | `GET /guardrail-events?project_id&request_id&direction&action` | guardrail audit trail (docs/spec/04 §11), tenant-scoped; also embedded in `GET /requests/{id}` |
 | invoices | `POST /invoices`, `POST /invoices/import?provider&period_start&period_end` (CSV body), `GET /invoices`, `GET /invoices/{id}`, `POST /invoices/{id}/reconcile` | provider bills vs settled ledger (docs/spec/04 §10); global scopes only |
 | role-bindings | `POST /role-bindings`, `GET /role-bindings?subject&org_id&scope_type&scope_id`, `POST /role-bindings/{id}/revoke` | delegated tenant roles (§3.2) |
 

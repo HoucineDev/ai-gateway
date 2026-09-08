@@ -74,6 +74,7 @@ def create_app(
             secrets=app.state.secrets,
             signals=app.state.signals,
             cache=app.state.cache,
+            http_client=app.state.upstream,
         )
         if settings.role in ("gateway", "all"):
             await app.state.snapshots.start()

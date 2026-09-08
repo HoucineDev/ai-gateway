@@ -106,6 +106,8 @@ Provider credentials are secret references on deployments (`env:NAME`), never st
 | Force a fresh answer | send `X-AIGW-Cache: no-cache` (refreshes the entry) or `no-store` (leaves the cache untouched) |
 | Measure gateway overhead / capacity | `python scripts/loadtest.py --key <virtual key> --duration 60 --concurrency 64 --stream-ratio 0.8 --upstream http://localhost:9000 --json run.json`; compare *added* p95 between builds; `--steer slow` makes the mock answer in ~400 ms like a real model; thresholds (`--max-added-p95-ms`, `--max-error-rate`, `--min-rps`) exit 1 for CI |
 | Reconcile a provider bill | export the bill as CSV (`provider_model,day,amount,prompt_tokens,completion_tokens`), then `curl -X POST 'localhost:8081/admin/v1/invoices/import?provider=openai&period_start=2026-09-01&period_end=2026-09-30' -H 'x-admin-key: …' -H 'content-type: text/csv' --data-binary @bill.csv`, then `POST /admin/v1/invoices/{id}/reconcile {"tolerance_pct": 1}`; read `status`, `delta_amount`, `report.missing_in_invoice` and each line's `status`/`delta_amount` |
+| Turn on guardrails for a project | `PATCH /admin/v1/projects/{id} {"settings": {...existing..., "guardrails": {"pre": [{"detector": "pii", "action": "redact"}], "post": [{"detector": "http", "url": "http://presidio-sidecar/check", "action": "block", "fail": "open", "timeout_ms": 500}], "post_stream": "buffer"}}}` (settings are replaced whole); takes effect on the next snapshot refresh |
+| Review guardrail hits | `GET /admin/v1/guardrail-events?project_id=&action=block` or the `guardrails` list in `GET /admin/v1/requests/{id}`; metric `aigw_guardrail_total{detector,direction,action}` |
 | Explain a routing decision | `GET /admin/v1/requests/{request_id}` → `attempts[].routing`: `strategy`, `candidates`, `rejected` (reason per deployment) and `signals` (per-candidate `ttfb_ms`, `queue_waiting`, `inflight`, `weight`, `score`) |
 | Raise a budget temporarily | `POST /admin/v1/budgets/{id}/temporary-increase {"amount": "50", "until": "<RFC3339>"}` |
 | Add a price version | `POST /admin/v1/prices` (insert-only, versioned by `effective_from`) |
@@ -152,6 +154,9 @@ Provider credentials are secret references on deployments (`env:NAME`), never st
 | A price added seconds ago is not applied (cost 0 on the next requests) | prices are filtered by `effective_from <= now` using the application clock (the one that stamps them); a future `effective_from` is honoured literally — check the value, not the database clock |
 | Invoice line `unmatched` although traffic existed | the bill's `provider_model` must equal the deployment's `provider_model` (Azure: deployment name; Bedrock: model id); or the usage was cached (never billed) |
 | Invoice `mismatch` only on `ledger_total` > `invoice_total` | `report.ambiguous_attempts` > 0: ambiguous attempts settle at the reserved maximum by design; the provider bills actual usage |
+| 400 `guardrail_blocked` | a detector in the project's policy matched (message names detector and categories) or a `fail: closed` detector failed (`detail.error` in the event: `timeout`, HTTP status); raise `timeout_ms`, fix the sidecar, or set `fail: open` to degrade to logging |
+| 503 `guardrail_config_invalid` | the project's `settings.guardrails` does not parse (unknown detector, bad regex, missing `url`); the project fails closed until fixed |
+| Streamed answer ends with a `guardrail_blocked` error event | `post_stream: tail`: the client already received the content; switch the project to `post_stream: buffer` for hard blocking at the cost of no first byte until the answer completes |
 | 503 `no_eligible_deployment` with reason `saturated` | this replica has `max_concurrency` requests open on every eligible deployment; raise the cap, add deployments or gateway replicas |
 
 ## 7. Change log of operational behaviour
@@ -186,3 +191,6 @@ Provider credentials are secret references on deployments (`env:NAME`), never st
   (a clock skew between host and database container made a just-created price invisible for a moment).
 - 2026-09-08 — provider invoice reconciliation (docs/spec/04 §10): `invoices` / `invoice_lines` (migration),
   JSON and CSV import, `…/reconcile` with amount and token tolerances, `invoices:*` global scopes.
+- 2026-09-08 — guardrail pipeline (docs/spec/04 §11): per-project pre/post rules, `pii` / `regex` / `keyword` /
+  `http` detectors, block/redact/flag, fail-open/closed, tail or buffered streams, `guardrail_events` (migration),
+  `GET /admin/v1/guardrail-events`, `aigw_guardrail_total`.

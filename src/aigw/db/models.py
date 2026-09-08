@@ -345,6 +345,29 @@ class InvoiceLine(Base):
     delta_amount: Mapped[Decimal | None] = mapped_column(MONEY)
 
 
+class GuardrailEvent(Base):
+    """One detector outcome on one request (docs/spec/04 §11): the guardrail audit trail."""
+
+    __tablename__ = "guardrail_events"
+    __table_args__ = (
+        Index("ix_guardrail_request", "request_id"),
+        Index("ix_guardrail_project_created", "project_id", "created_at"),
+    )
+    id: Mapped[uuid.UUID] = _pk()
+    request_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    team_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    key_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    direction: Mapped[str] = mapped_column(String(4))  # pre | post
+    detector: Mapped[str] = mapped_column(String(40))
+    action: Mapped[str] = mapped_column(String(10))  # block | redact | flag | error
+    categories: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
+    detail: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = _created()
+
+
 class AuditEvent(Base):
     __tablename__ = "audit_events"
     __table_args__ = (Index("ix_audit_target", "target_type", "target_id", "created_at"),)

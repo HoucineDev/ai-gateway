@@ -90,8 +90,8 @@ Feature families from the proposal's reference inventory, with the phase in whic
 
 | Item | Phase | Notes |
 |------|-------|-------|
-| Pre/post policy pipeline with replaceable detectors | P3 | fail-open/closed per tenant, timeouts |
-| Presidio / LLM Guard / provider moderation adapters | P3 | |
+| Pre/post policy pipeline with replaceable detectors | P3 ✓ | per-project rules, fail-open/closed, timeouts, tail/buffer streams, audit trail (docs/spec/04 §11, `tests/test_guardrails.py`) |
+| Presidio / LLM Guard / provider moderation adapters | P3 (contract ✓) | reachable through the `http` detector contract; built-ins `pii`, `regex`, `keyword`; native wrappers on demand |
 | MCP server registry, namespaced tools, tool permissions, accounting | P4 | Streamable HTTP first |
 | Agent run limits (cost, tool calls, retries, elapsed) | P4 | |
 | Approval workflows | P3 | |

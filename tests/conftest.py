@@ -39,7 +39,7 @@ async def db():
         await s.execute(
             text(
                 "TRUNCATE usage_events, request_attempts, budgets, virtual_keys, deployments, models, prices, projects, "
-                "teams, organizations, audit_events, outbox, invoices RESTART IDENTITY CASCADE"
+                "teams, organizations, audit_events, outbox, invoices, guardrail_events RESTART IDENTITY CASCADE"
             )
         )
     yield d

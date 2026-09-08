@@ -158,3 +158,34 @@ scopes are global only (no delegated role carries them).
 Sources per provider: OpenAI and Anthropic usage/cost exports (model × day, tokens), Azure Cost Management export
 (deployment × day), Google Cloud Billing export (SKU × day, amounts only), AWS Cost and Usage Report (model id ×
 day). Local `openai_compat` deployments carry `internal-allocation` prices and are not reconciled.
+
+## 11. Guardrail pipeline (pre / post policy with replaceable detectors)
+
+Per project, `projects.settings.guardrails = {"pre": [rule…], "post": [rule…], "post_stream": "tail" | "buffer"}`
+travels in the config snapshot with the key scope. A rule is `{"detector": …, "action": block | redact | flag,
+"fail": closed | open, "timeout_ms": 1000, …detector parameters}`. Built-in detectors: `pii` (`kinds` ⊆ email, phone,
+iban, card — cards Luhn-checked; redaction writes `[EMAIL]`, `[CARD]`, …), `regex` (`patterns[{pattern, category,
+replacement, ignore_case}]`), `keyword` (`words`, whole-word, redacts to `***`) and `http` (`url`, `headers`,
+`metadata`): `POST {text, direction, request_id, project_id, model, metadata}` → `{flagged, categories,
+redacted_text}`, the contract Presidio, LLM Guard or a provider moderation API are wrapped behind. Detectors are
+replaceable by registering a name in `aigw.gateway.guardrails.DETECTORS`. An invalid policy fails the project
+closed (503 `guardrail_config_invalid`) rather than silently disabling protection.
+
+**Pre** runs after validation and before rate limiting, routing and reservation, on every user/system/developer
+message (each text part) or embedding input, so a blocked request never reaches a provider and never costs anything.
+`block` → 400 `guardrail_blocked` naming detector and categories; `redact` rewrites the text that is sent upstream;
+`flag` only records. Rules run in order; redactions chain; a detector timeout or error blocks when `fail: closed`
+and is recorded as an `error` outcome and skipped when `fail: open`.
+
+**Post** runs on the assistant text after settlement (the provider call has been paid for) and before the response
+is cached or returned. Unary: `block` → 400 `guardrail_blocked`, `redact` rewrites the returned content. Streams:
+`post_stream: tail` (default) checks the finished stream — the client has seen the content; a block appends an
+`error` event with code `guardrail_blocked` and the stream ends, so detection lag is the whole answer;
+`post_stream: buffer` holds the entire stream, checks it, then delivers it untouched, or only the error event on a
+block, or rebuilt from the redacted text on a redaction (no first-byte until the answer is complete). Any flagged or
+redacted exchange is never written to the response cache.
+
+Every outcome is a `guardrail_events` row (docs/spec/02; request, tenant ids, direction, detector, action,
+categories, latency, error) and increments `aigw_guardrail_total{detector,direction,action}`. `GET /admin/v1/
+requests/{id}` includes them and `GET /admin/v1/guardrail-events` lists them under the caller's tenant scope
+(`guardrails:read`, granted to every delegated role).

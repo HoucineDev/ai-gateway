@@ -15,6 +15,8 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
+import httpx
+
 from aigw.adapters.base import DeploymentConfig
 from aigw.adapters.registry import AdapterRegistry
 from aigw.config import Settings
@@ -30,13 +32,16 @@ from aigw.core.types import (
     EndEvent,
     FinishEvent,
     StartEvent,
+    TextPart,
     ToolCallDelta,
     Usage,
     UsageEvent,
 )
+from aigw.db.models import GuardrailEvent
 from aigw.gateway import metrics
 from aigw.gateway.accounting import Ledger, Reservation
 from aigw.gateway.cache import ResponseCache, cache_key, is_deterministic, parse_directive
+from aigw.gateway.guardrails import GuardrailRunner, Outcome
 from aigw.gateway.ratelimit import CooldownStore, LimitScope, RateLimiter
 from aigw.gateway.router import Candidate, Router, RoutingDecision, RoutingPolicy
 from aigw.gateway.signals import RoutingSignals
@@ -61,6 +66,10 @@ class RequestContext:
     limit_scopes: list[LimitScope] = field(default_factory=list)
     cache_key: str | None = None  # docs/spec/04 §9
     cache_status: str = "off"  # off | bypass | miss | refresh | hit
+    guard_skip_cache: bool = False  # a guardrail flagged/redacted this exchange: never cache it
+    guard_buffered: bool = False  # post_stream=buffer: the stream is held and checked before delivery
+    stream_text: str | None = None  # assembled streamed answer (set on success)
+    stream_usage: Usage | None = None
     cache_key: str | None = None  # docs/spec/04 §9
     cache_status: str = "off"  # off | bypass | miss | refresh | hit
 
@@ -79,6 +88,7 @@ class Pipeline:
         router: Router | None = None,
         signals: RoutingSignals | None = None,
         cache: ResponseCache | None = None,
+        http_client: httpx.AsyncClient | None = None,
     ):
         self.settings = settings
         self.snapshots = snapshots
@@ -89,6 +99,7 @@ class Pipeline:
         self.secrets = secrets
         self.signals = signals or RoutingSignals.build(None, settings.routing_ewma_alpha)
         self.cache = cache or ResponseCache(None, settings.cache_max_entry_bytes)
+        self.guardrails = GuardrailRunner(http_client)
         self.cache = cache or ResponseCache(None, settings.cache_max_entry_bytes)
         self.router = router or Router(
             adapters, cooldowns, signals=self.signals, policy=RoutingPolicy.from_settings(settings)
@@ -146,6 +157,7 @@ class Pipeline:
             LimitScope("key", scope.key_id, scope.rpm_limit, scope.tpm_limit),
             LimitScope("project", scope.project_id, scope.project_rpm_limit, scope.project_tpm_limit),
         ]
+        await self._guard_pre(ctx)
         await self.limiter.check(ctx.limit_scopes, est_prompt + est_out)
         ctx.decision = await self.router.route(model, req, endpoint, est_prompt)
         self._plan_cache(ctx, cache_directive)
@@ -256,6 +268,119 @@ class Pipeline:
     def _credential(self, d: DeploymentConfig) -> str:
         return self.secrets.resolve(d.credential_ref)
 
+    # ---- guardrails (docs/spec/04 §11) -------------------------------------
+    def _guard_context(self, ctx: RequestContext, direction: str) -> dict:
+        return {
+            "direction": direction,
+            "request_id": str(ctx.request_id),
+            "project_id": ctx.scope.project_id,
+            "model": ctx.model.name,
+        }
+
+    async def _guard_run(self, ctx: RequestContext, rules, text: str, direction: str) -> tuple[str, list[Outcome]]:
+        text, outcomes = await self.guardrails.run(rules, text, self._guard_context(ctx, direction))
+        if outcomes:
+            await self._record_guardrails(ctx, direction, outcomes)
+        return text, outcomes
+
+    async def _record_guardrails(self, ctx: RequestContext, direction: str, outcomes: list[Outcome]) -> None:
+        scope = ctx.scope
+        rows = []
+        for o in outcomes:
+            metrics.GUARDRAILS.labels(detector=o.rule.detector, direction=direction, action=o.action).inc()
+            rows.append(
+                GuardrailEvent(
+                    request_id=ctx.request_id,
+                    org_id=uuid.UUID(scope.org_id),
+                    team_id=uuid.UUID(scope.team_id),
+                    project_id=uuid.UUID(scope.project_id),
+                    key_id=uuid.UUID(scope.key_id),
+                    direction=direction,
+                    detector=o.rule.detector,
+                    action=o.action,
+                    categories=list(o.categories),
+                    detail={"error": o.error, "fail": o.rule.fail, "rule_action": o.rule.action},
+                    latency_ms=o.latency_ms,
+                )
+            )
+        ctx.guard_skip_cache = True
+        async with self.ledger.db.tx() as s:
+            s.add_all(rows)
+
+    @staticmethod
+    def _blocked_error(outcomes: list[Outcome]) -> GatewayError:
+        o = next(x for x in outcomes if x.action == "block")
+        what = ", ".join(o.categories) or "policy"
+        return GatewayError(
+            ErrorType.invalid_request,
+            f"Blocked by guardrail '{o.rule.detector}': {what}",
+            code="guardrail_blocked",
+            details={"detector": o.rule.detector, "categories": o.categories, "error": o.error},
+        )
+
+    async def _guard_pre(self, ctx: RequestContext) -> None:
+        scope = ctx.scope
+        if scope.guardrails_error:
+            raise GatewayError(
+                ErrorType.unavailable,
+                f"Guardrail policy of this project is invalid: {scope.guardrails_error}",
+                code="guardrail_config_invalid",
+            )
+        policy = scope.guardrails
+        if not policy or not policy.pre:
+            return
+        req = ctx.req
+        if isinstance(req, ChatRequest):
+            for m in req.messages:
+                if m.role not in ("user", "system", "developer"):
+                    continue
+                if isinstance(m.content, str):
+                    new, outcomes = await self._guard_run(ctx, policy.pre, m.content, "pre")
+                    if any(o.action == "block" for o in outcomes):
+                        raise self._blocked_error(outcomes)
+                    m.content = new
+                elif isinstance(m.content, list):
+                    for part in m.content:
+                        if isinstance(part, TextPart):
+                            new, outcomes = await self._guard_run(ctx, policy.pre, part.text, "pre")
+                            if any(o.action == "block" for o in outcomes):
+                                raise self._blocked_error(outcomes)
+                            part.text = new
+        else:
+            texts = req.texts()
+            if texts:
+                out: list[str] = []
+                for t in texts:
+                    new, outcomes = await self._guard_run(ctx, policy.pre, t, "pre")
+                    if any(o.action == "block" for o in outcomes):
+                        raise self._blocked_error(outcomes)
+                    out.append(new)
+                req.input = out[0] if isinstance(req.input, str) else out
+
+    async def _guard_post_unary(self, ctx: RequestContext, out) -> None:
+        policy = ctx.scope.guardrails
+        if not policy or not policy.post or not isinstance(out, ChatResponse):
+            return
+        for choice in out.choices:
+            content = choice.message.content
+            if not content:
+                continue
+            new, outcomes = await self._guard_run(ctx, policy.post, content, "post")
+            if any(o.action == "block" for o in outcomes):
+                raise self._blocked_error(outcomes)
+            if new != content:
+                choice.message.content = new
+
+    async def _guard_post_stream(self, ctx: RequestContext, text: str) -> GatewayError | None:
+        """Tail mode: the client already saw the content; a block ends the stream with an error event."""
+        policy = ctx.scope.guardrails
+        if not policy or not policy.post or not text:
+            return None
+        _, outcomes = await self._guard_run(ctx, policy.post, text, "post")
+        if any(o.action == "block" for o in outcomes):
+            return self._blocked_error(outcomes)
+        return None
+
     # ---- exact response cache (docs/spec/04 §9) ---------------------------
     def _plan_cache(self, ctx: RequestContext, directive: str | None) -> None:
         scope = ctx.scope
@@ -311,7 +436,7 @@ class Pipeline:
     async def _cache_store(
         self, ctx: RequestContext, cand: Candidate, wire: dict[str, Any], usage: Usage | None
     ) -> None:
-        if ctx.cache_status not in ("miss", "refresh") or not ctx.cache_key or usage is None:
+        if ctx.cache_status not in ("miss", "refresh") or not ctx.cache_key or usage is None or ctx.guard_skip_cache:
             return
         entry = {
             "response": {k: v for k, v in wire.items() if k != "aigw"},
@@ -425,6 +550,7 @@ class Pipeline:
                     ttfb=ttfb,
                     upstream_request_id=out.upstream_request_id,
                 )
+                await self._guard_post_unary(ctx, out)
                 if isinstance(out, ChatResponse):
                     out.usage = usage
                     wire = out.to_wire(
@@ -461,6 +587,33 @@ class Pipeline:
 
     # ---- streaming chat ------------------------------------------------------
     async def run_stream(self, ctx: RequestContext) -> AsyncIterator[bytes]:
+        """Yield SSE bytes. With `guardrails.post_stream = "buffer"` the whole stream is held, checked and only then
+        delivered (blocked → a single error event; redacted → rebuilt from the redacted text)."""
+        policy = ctx.scope.guardrails
+        if not (policy and policy.post and policy.post_stream == "buffer"):
+            async for chunk in self._run_stream_raw(ctx):
+                yield chunk
+            return
+        ctx.guard_buffered = True
+        buffered = [chunk async for chunk in self._run_stream_raw(ctx)]
+        if ctx.stream_text is None:  # the stream failed or was cut: nothing to moderate, pass it through
+            for chunk in buffered:
+                yield chunk
+            return
+        text, outcomes = await self._guard_run(ctx, policy.post, ctx.stream_text, "post")
+        if any(o.action == "block" for o in outcomes):
+            yield _sse({"error": self._blocked_error(outcomes).envelope(str(ctx.request_id))["error"]})
+            yield b"data: [DONE]\n\n"
+            return
+        if text != ctx.stream_text and ctx.stream_usage is not None:
+            wire = self._stream_wire(ctx, text, "stop", ctx.stream_usage, False)
+            async for chunk in self.replay_stream(ctx, wire):
+                yield chunk
+            return
+        for chunk in buffered:
+            yield chunk
+
+    async def _run_stream_raw(self, ctx: RequestContext) -> AsyncIterator[bytes]:
         """Yield SSE bytes. Fallback happens only before the first client-visible byte."""
         req: ChatRequest = ctx.req  # type: ignore[assignment]
         include_usage = bool(req.stream_options and req.stream_options.include_usage)
@@ -588,6 +741,14 @@ class Pipeline:
                 err=err_obj,
                 first_byte_at=first_byte_at,
             )
+            if status == "succeeded" and err_obj is None:
+                ctx.stream_text, ctx.stream_usage = "".join(parts), usage
+                if not ctx.guard_buffered:
+                    blocked = await self._guard_post_stream(ctx, ctx.stream_text)
+                    if blocked is not None:
+                        yield _sse({"error": blocked.envelope(str(ctx.request_id))["error"]})
+                        yield b"data: [DONE]\n\n"
+                        return
             if status == "succeeded" and err_obj is None and finished and not saw_tools and usage is not None:
                 await self._cache_store(
                     ctx,

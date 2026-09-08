@@ -28,6 +28,7 @@ RATELIMIT_REJECTIONS = Counter("aigw_ratelimit_rejections_total", "Requests reje
 COOLDOWNS = Counter("aigw_deployment_cooldowns_total", "Deployment cooldowns", ["deployment", "reason"])
 RATELIMIT_DEGRADED = Gauge("aigw_ratelimit_degraded", "1 when Valkey rate limiting is unavailable")
 CACHE = Counter("aigw_cache_total", "Exact response cache outcomes", ["result"])  # hit|miss|refresh|bypass|off
+GUARDRAILS = Counter("aigw_guardrail_total", "Guardrail outcomes", ["detector", "direction", "action"])
 CONFIG_VERSION = Gauge("aigw_config_version", "Loaded configuration version")
 
 

@@ -34,6 +34,7 @@ from aigw.db.models import (
     Budget,
     Deployment,
     DeploymentHealth,
+    GuardrailEvent,
     Invoice,
     InvoiceLine,
     Model,
@@ -713,10 +714,18 @@ async def get_request(request_id: str, request: Request, actor: Actor = Depends(
         a = attempts[0]
         actor.require("requests:read", org_id=a.org_id, team_id=a.team_id, project_id=a.project_id)
         events = list((await s.execute(select(UsageEvent).where(UsageEvent.request_id == rid))).scalars())
+        guards = list(
+            (
+                await s.execute(
+                    select(GuardrailEvent).where(GuardrailEvent.request_id == rid).order_by(GuardrailEvent.created_at)
+                )
+            ).scalars()
+        )
         return {
             "request_id": request_id,
             "attempts": [to_dict(a) for a in attempts],
             "usage": [to_dict(e) for e in events],
+            "guardrails": [to_dict(g) for g in guards],
         }
 
 
@@ -1100,3 +1109,42 @@ async def reconcile_invoice(
         )
         audit(s, actor, "invoice.reconcile", "invoice", inv.id, before, to_dict(inv))
         return _invoice_view(inv, lines)
+
+
+# ---- guardrail audit trail (docs/spec/04 §11) -----------------------------------
+
+
+@router.get("/guardrail-events")
+async def list_guardrail_events(
+    request: Request,
+    project_id: str | None = None,
+    request_id: str | None = None,
+    direction: str | None = Query(default=None, pattern="^(pre|post)$"),
+    action: str | None = Query(default=None, pattern="^(block|redact|flag|error)$"),
+    limit: int = Query(100, le=1000),
+    actor: Actor = Depends(require_scope("guardrails:read")),
+):
+    async with _db(request).session() as s:
+        q = (
+            select(GuardrailEvent)
+            .where(
+                visible(
+                    actor,
+                    "guardrails:read",
+                    org=GuardrailEvent.org_id,
+                    team=GuardrailEvent.team_id,
+                    project=GuardrailEvent.project_id,
+                )
+            )
+            .order_by(GuardrailEvent.created_at.desc())
+            .limit(limit)
+        )
+        if project_id:
+            q = q.where(GuardrailEvent.project_id == parse_uuid(project_id, "project_id"))
+        if request_id:
+            q = q.where(GuardrailEvent.request_id == parse_uuid(request_id, "request_id"))
+        if direction:
+            q = q.where(GuardrailEvent.direction == direction)
+        if action:
+            q = q.where(GuardrailEvent.action == action)
+        return {"data": [to_dict(g) for g in (await s.execute(q)).scalars()]}

@@ -54,6 +54,11 @@ Invoice reconciliation (docs/spec/04 §10): import a provider bill (JSON or the 
 `provider_model, day, amount[, prompt_tokens, completion_tokens]`) and reconcile it against what the ledger settled for
 that provider and period, line by line, with amount and token tolerances and the usage the bill forgot.
 
+Guardrails (docs/spec/04 §11): per-project `settings.guardrails` with `pre` (request) and `post` (response) rules —
+built-in `pii`, `regex`, `keyword` detectors and an `http` contract for Presidio, LLM Guard or provider moderation —
+each `block`, `redact` or `flag`, with timeouts and fail-open/closed. Pre blocks cost nothing; streams are checked
+at the tail or fully buffered per policy; every outcome lands in `guardrail_events` and the Requests view.
+
 Control API with Keycloak (docs/spec/01 §3.1): the `oidc` compose profile starts Keycloak 26 with a dev realm
 (roles `aigw-admin` / `aigw-operator` / `aigw-viewer`, client `aigw-portal`, users alice/bob/carol/dan, password = username).
 

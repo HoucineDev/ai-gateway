@@ -49,6 +49,7 @@ RESOURCES = (
     "config",
     "role_bindings",
     "invoices",
+    "guardrails",
 )
 ACTIONS = ("read", "write")
 ALL_SCOPES = tuple(f"{r}:{a}" for r in RESOURCES for a in ACTIONS)
@@ -72,6 +73,7 @@ _ROLE_SCOPES: dict[str, frozenset[str]] = {
             "audit:read",
             "config:read",
             "role_bindings:*",
+            "guardrails:read",
         }
     ),
     "team_owner": frozenset(
@@ -88,6 +90,7 @@ _ROLE_SCOPES: dict[str, frozenset[str]] = {
             "requests:read",
             "config:read",
             "role_bindings:*",
+            "guardrails:read",
         }
     ),
     "project_member": frozenset(
@@ -104,6 +107,7 @@ _ROLE_SCOPES: dict[str, frozenset[str]] = {
             "requests:read",
             "config:read",
             "role_bindings:read",
+            "guardrails:read",
         }
     ),
 }
