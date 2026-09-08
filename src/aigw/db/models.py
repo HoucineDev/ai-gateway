@@ -382,6 +382,39 @@ class GuardrailEvent(Base):
     created_at: Mapped[datetime] = _created()
 
 
+class ScimUser(Base):
+    """Identity pushed by the IdP through SCIM (docs/spec/01 §3.4); `user_name` is the role-binding subject."""
+
+    __tablename__ = "scim_users"
+    id: Mapped[uuid.UUID] = _pk()
+    external_id: Mapped[str | None] = mapped_column(String(200), index=True)
+    user_name: Mapped[str] = mapped_column(String(320), unique=True)
+    display_name: Mapped[str | None] = mapped_column(String(200))
+    emails: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = _created()
+
+
+class ScimGroup(Base):
+    __tablename__ = "scim_groups"
+    id: Mapped[uuid.UUID] = _pk()
+    external_id: Mapped[str | None] = mapped_column(String(200), index=True)
+    display_name: Mapped[str] = mapped_column(String(300), unique=True)
+    role: Mapped[str | None] = mapped_column(String(30))  # mapped delegated role, when the name follows aigw:<role>:…
+    scope_type: Mapped[str | None] = mapped_column(String(20))
+    scope_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = _created()
+
+
+class ScimGroupMember(Base):
+    __tablename__ = "scim_group_members"
+    group_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("scim_groups.id", ondelete="CASCADE"), primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("scim_users.id", ondelete="CASCADE"), primary_key=True)
+    created_at: Mapped[datetime] = _created()
+
+
 class AuditEvent(Base):
     __tablename__ = "audit_events"
     __table_args__ = (Index("ix_audit_target", "target_type", "target_id", "created_at"),)

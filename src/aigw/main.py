@@ -134,6 +134,15 @@ def create_app(
 
         app.include_router(admin_router)
         app.include_router(admin_public_router)
+        from aigw.admin.scim import ScimError
+        from aigw.admin.scim import router as scim_router
+
+        app.include_router(scim_router)
+
+        @app.exception_handler(ScimError)
+        async def _scim_error(request: Request, exc: ScimError):  # noqa: ARG001
+            return exc.response()
+
         if settings.cors_origins:
             from fastapi.middleware.cors import CORSMiddleware
 

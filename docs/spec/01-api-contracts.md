@@ -6,6 +6,7 @@
 |---------|-------------|------|-----------------|
 | Inference API | `/v1/*` | Virtual key (`Authorization: Bearer aigw_…`) | `gateway` |
 | Control API | `/admin/v1/*` | Admin key (`X-Admin-Key`) or Keycloak OIDC bearer JWT with roles mapped to scopes (§3.1) | `admin` |
+| SCIM 2.0 | `/scim/v2/*` | Bearer token `AIGW_SCIM_TOKEN` (§3.4) | `admin` |
 | Health | `/healthz`, `/readyz` | none | all |
 | Metrics | `/metrics` | none (private ingress) | all |
 
@@ -72,6 +73,7 @@ All write operations produce an append-only `audit_events` row with actor, actio
 | auth | `GET /auth/config` | unauthenticated: `{admin_key: bool, oidc: {issuer, client_id, audience} | null}` for the portal's login flow |
 | guardrail-events | `GET /guardrail-events?project_id&request_id&direction&action` | guardrail audit trail (docs/spec/04 §11), tenant-scoped; also embedded in `GET /requests/{id}` |
 | invoices | `POST /invoices`, `POST /invoices/import?provider&period_start&period_end` (CSV body), `GET /invoices`, `GET /invoices/{id}`, `POST /invoices/{id}/reconcile` | provider bills vs settled ledger (docs/spec/04 §10); global scopes only |
+| SCIM | `/scim/v2/{ServiceProviderConfig,ResourceTypes,Schemas,Users,Groups}` | identity-provider provisioning (§3.4); separate bearer token, outside `/admin/v1` scopes |
 | role-bindings | `POST /role-bindings`, `GET /role-bindings?subject&org_id&scope_type&scope_id`, `POST /role-bindings/{id}/revoke` | delegated tenant roles (§3.2) |
 
 ### 3.1 Authentication and scopes
@@ -142,6 +144,24 @@ is refused with 403 `missing_role`.
 Creating a binding requires `role_bindings:write` on the target tenant and, for delegates, a rank at or above
 the role being granted at that target (`org_owner` > `team_owner` > `project_member`), so a team owner can add
 project members but cannot make org owners. Every binding write is audited; `GET /me` lists the caller's grants.
+
+### 3.4 SCIM 2.0 provisioning
+
+The admin role serves SCIM 2.0 core (RFC 7643/7644) at `/scim/v2` for an identity provider that pushes users and
+groups: `ServiceProviderConfig`, `ResourceTypes`, `Schemas`; `Users` (list with `filter=userName eq "…"` /
+`externalId eq` / `emails.value eq`, `startIndex`/`count`; `POST`, `GET`, `PUT`, `PATCH` with add/replace/remove on
+`userName`, `displayName`, `emails`, `externalId`, `active`; `DELETE`); `Groups` (list with `displayName eq`,
+`POST`, `GET`, `PUT`, `PATCH` with `members` add/remove/replace incl. `members[value eq "…"]`, `DELETE`).
+Authentication is the bearer token `AIGW_SCIM_TOKEN` (503 until configured); errors use the SCIM error schema;
+every write is audited with actor `scim`.
+
+Users are the subjects delegated roles bind to (`userName`, or any of the user's `emails`). A user with
+`active: false`, or one that was deleted after being provisioned, cannot use the control API even with a valid
+Keycloak token (403 `user_deactivated`); deletion also revokes its role bindings. Groups named
+`aigw:<role>:<scope_type>:<id>` (`aigw:org_owner:organization:<uuid|slug>`, `aigw:team_owner:team:<uuid>`,
+`aigw:project_member:project:<uuid>`) map to delegated roles: adding a member creates the role binding for its
+`userName`, removing revokes it, renaming the group moves every member's binding, deleting it revokes them all.
+A group with any other name is stored without effect on access.
 
 Portal login: a dedicated `/login` page offers the admin key (bootstrap credential, verified through `GET /me`
 before entry) and *Sign in with SSO*, greyed out until `GET /auth/config` reports an issuer; unauthenticated pages

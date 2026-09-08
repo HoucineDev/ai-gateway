@@ -9,6 +9,8 @@ from dataclasses import replace
 from sqlalchemy import ColumnElement, false, or_, select, true
 
 from aigw.admin.auth import Actor, Grant
+from aigw.admin.scim import deactivated_subject
+from aigw.core.errors import ErrorType, GatewayError
 from aigw.db.models import Budget, Project, RoleBinding, VirtualKey
 
 
@@ -17,6 +19,9 @@ async def load_grants(db, actor: Actor) -> Actor:
     if actor.type != "user" or not actor.identities:
         return actor
     async with db.session() as s:
+        locked = await deactivated_subject(s, set(actor.identities))
+        if locked:
+            raise GatewayError(ErrorType.permission, f"User {locked} is deactivated (SCIM)", code="user_deactivated")
         rows = (
             await s.execute(
                 select(RoleBinding).where(

@@ -59,6 +59,10 @@ built-in `pii`, `regex`, `keyword` detectors and an `http` contract for Presidio
 each `block`, `redact` or `flag`, with timeouts and fail-open/closed. Pre blocks cost nothing; streams are checked
 at the tail or fully buffered per policy; every outcome lands in `guardrail_events` and the Requests view.
 
+SCIM 2.0 provisioning (docs/spec/01 §3.4): point Keycloak, Entra ID or Okta at `/scim/v2` with `AIGW_SCIM_TOKEN`;
+users become role-binding subjects (deactivation locks them out), groups named `aigw:<role>:<scope>:<id>` grant and
+revoke delegated roles as members come and go.
+
 Scheduled key rotation (docs/spec/01 §3.2): give a key `rotate_every_seconds`; the worker rotates it with a grace
 period and seals the new plaintext for a single `POST /keys/{id}/pickup` (needs `AIGW_KEY_PICKUP_SECRET`).
 

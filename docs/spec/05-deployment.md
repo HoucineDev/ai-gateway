@@ -49,6 +49,7 @@ python scripts/oidc_smoke.py                   # end-to-end check: tokens → /a
 | `AIGW_CONFIG_REFRESH_SECONDS` | 5 | snapshot poll |
 | `AIGW_HEALTH_CHECK_INTERVAL_SECONDS`, `AIGW_HEALTH_CHECK_TIMEOUT_SECONDS` | 30, 5 | worker active health checks (docs/spec/04 §6); 0 disables |
 | `AIGW_HEALTH_FAILURE_THRESHOLD`, `AIGW_HEALTH_COOLDOWN_SECONDS` | 2, 90 | consecutive failed probes before cooldown; cooldown length (refreshed while down) |
+| `AIGW_SCIM_TOKEN` | — | bearer token for `/scim/v2` provisioning (docs/spec/01 §3.4); unset = SCIM disabled |
 | `AIGW_KEY_PICKUP_SECRET`, `AIGW_KEY_PICKUP_TTL_SECONDS` | —, 86400 | Fernet key sealing scheduled-rotation plaintexts until pickup (docs/spec/01 §3.2); pickup TTL |
 | `AIGW_CACHE_MAX_ENTRY_BYTES` | 262144 | exact response cache: largest stored answer (docs/spec/04 §9) |
 | `AIGW_ROUTING_STRATEGY` | adaptive | `weighted` (weights only) or `adaptive` (docs/spec/04 §5.1) |

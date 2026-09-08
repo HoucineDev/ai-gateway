@@ -40,7 +40,7 @@ Local dev env: `AIGW_DATABASE_URL`, `AIGW_VALKEY_URL`, `AIGW_ADMIN_KEY` (see `.e
 | `src/aigw/core` | canonical types (`types.py`), errors/classification, pricing, token estimation, secret refs |
 | `src/aigw/adapters` | `base.py` contract + `openai_compat`, `openai`, `anthropic`, `azure_openai`, `gemini`, `bedrock` (+ `sigv4`, `eventstream`); `registry.py` |
 | `src/aigw/gateway` | `snapshot` (config cache), `auth`, `ratelimit` (Valkey Lua), `accounting` (reserve/settle ledger), `router` (priority groups + adaptive weights), `signals` (latency EWMA, in-flight, queue pressure), `cache` (exact response cache, per-project policy), `guardrails` (pre/post detector pipeline), `pipeline` (orchestration), `routes`, `metrics` |
-| `src/aigw/admin` | control API `/admin/v1`, `auth` (admin key / Keycloak OIDC → global scopes + delegated grants, `require_scope`, `Actor.require`), `tenancy` (grant loading, SQL visibility predicates), `reconcile` (provider invoices vs ledger), `service` (audit, config bump) |
+| `src/aigw/admin` | control API `/admin/v1`, `auth` (admin key / Keycloak OIDC → global scopes + delegated grants, `require_scope`, `Actor.require`), `tenancy` (grant loading, SQL visibility predicates), `reconcile` (provider invoices vs ledger), `scim` (SCIM 2.0 Users/Groups → role bindings), `service` (audit, config bump) |
 | `src/aigw/worker` | outbox consumer, pending-attempt reconciliation, key expiry, `rotation` (scheduled key rotation + sealed pickup), `health` (active probes + vLLM `/metrics` scrape → `deployment_health`, Valkey cooldown and `dq:` pressure) |
 | `src/aigw/db` | SQLAlchemy models, Alembic migrations (`src/aigw/migrations`) |
 | `portal/` | React 18 + Vite + Tailwind v4 + TanStack Query; tokens in `src/index.css`; API client `src/lib/api.ts`; login page `src/pages/Login.tsx` (admin key or SSO), Keycloak PKCE `src/lib/auth.ts`, scopes via `src/lib/session.tsx` (`useSession().can`, `<Can>`) |
@@ -58,5 +58,5 @@ Local dev env: `AIGW_DATABASE_URL`, `AIGW_VALKEY_URL`, `AIGW_ADMIN_KEY` (see `.e
 
 Phase 2 done: Keycloak OIDC roles on control API, delegated tenant roles, portal SSO, active health checks, adaptive
 routing (latency EWMA + vLLM queue pressure + local admission control), exact response cache, Azure OpenAI, Gemini (Vertex/Google AI) and Bedrock adapters, load-test harness, provider invoice reconciliation. Phase 2 is complete.
-Phase 3 done: guardrail pipeline, scheduled key rotation. Next: SCIM, scoped logging exporters, approvals, retention.
+Phase 3 done: guardrail pipeline, scheduled key rotation, SCIM provisioning, portal login page. Next: scoped logging exporters, approvals, retention.
 Phase 4: native Anthropic/Gemini/Bedrock ingress, media APIs, files/batches, MCP/A2A, agent run limits, multi-region.

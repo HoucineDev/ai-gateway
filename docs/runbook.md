@@ -114,6 +114,8 @@ Provider credentials are secret references on deployments (`env:NAME`), never st
 | Raise a budget temporarily | `POST /admin/v1/budgets/{id}/temporary-increase {"amount": "50", "until": "<RFC3339>"}` |
 | Add a price version | `POST /admin/v1/prices` (insert-only, versioned by `effective_from`) |
 | Grant portal access (global) | assign realm role `aigw-admin` / `aigw-operator` / `aigw-viewer` in Keycloak; scopes take effect on the next token |
+| Provision users/groups from the IdP (SCIM) | set `AIGW_SCIM_TOKEN` on the admin role; configure the IdP's SCIM connector with base URL `https://<admin>/scim/v2` and that bearer token; create groups named `aigw:org_owner:organization:<org uuid or slug>`, `aigw:team_owner:team:<team uuid>`, `aigw:project_member:project:<project uuid>` and assign users — memberships become role bindings within seconds; verify with `GET /admin/v1/role-bindings?subject=<userName>` |
+| Lock a person out immediately | deactivate them in the IdP (SCIM `active: false`) → 403 `user_deactivated` on their next control-API call even with a valid token; delete them to revoke their bindings too |
 | Delegate one tenant | portal → Organizations & keys → select org/team/project → *Members* → add username/email, or `POST /admin/v1/role-bindings {"subject":"carol","role":"team_owner","scope_type":"team","scope_id":…}`; immediate, no new token needed |
 | Remove a delegate | *Members* → remove, or `POST /admin/v1/role-bindings/{id}/revoke`; their next request fails with 403 `missing_role` unless a global role remains |
 | See who can act on a tenant | `GET /admin/v1/role-bindings?scope_type=&scope_id=` (`include_revoked=true` for history); a user's own view: `GET /admin/v1/me` → `grants` |
@@ -163,6 +165,9 @@ Provider credentials are secret references on deployments (`env:NAME`), never st
 | Worker logs `due for rotation but AIGW_KEY_PICKUP_SECRET is not set` | set the secret on worker and admin, or clear the schedule (`PATCH /keys/{id} {"clear_schedule": true}`) |
 | 404 `pickup_not_available` | already picked up, expired (`AIGW_KEY_PICKUP_TTL_SECONDS`), or the key was rotated manually (manual rotation returns the plaintext in the response instead) |
 | 503 `pickup_undecryptable` | `AIGW_KEY_PICKUP_SECRET` differs between the worker that sealed it and the admin role reading it |
+| 403 `user_deactivated` | the identity was deactivated or deleted through SCIM; reactivate in the IdP or delete the `scim_users` row if the SCIM connector is gone |
+| SCIM connector reports 503 | `AIGW_SCIM_TOKEN` is unset on the admin role; 401 means the connector's token differs |
+| Group membership does not grant access | the group name must match `aigw:<role>:<scope_type>:<id>` exactly and the target must exist (400 `invalidValue` on creation otherwise); plain groups are stored without effect |
 | 503 `no_eligible_deployment` with reason `saturated` | this replica has `max_concurrency` requests open on every eligible deployment; raise the cap, add deployments or gateway replicas |
 
 ## 7. Change log of operational behaviour
@@ -205,3 +210,5 @@ Provider credentials are secret references on deployments (`env:NAME`), never st
   `POST /keys/{id}/pickup`, outbox `key.rotated`.
 - 2026-09-08 — portal login page (`/login`): admin key or *Sign in with SSO*, `redirect_to` round trip, logout
   lands on it; unauthenticated pages redirect there.
+- 2026-09-08 — SCIM 2.0 provisioning (docs/spec/01 §3.4): `/scim/v2` Users and Groups (migration), `AIGW_SCIM_TOKEN`,
+  group → role-binding mapping, deactivated users locked out (`user_deactivated`).

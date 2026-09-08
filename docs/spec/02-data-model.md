@@ -15,7 +15,15 @@ role_bindings(id, subject TEXT (Keycloak sub | username | email), subject_kind E
                                                                          UNIQUE(subject, role, scope_type, scope_id)
 ```
 
-Role bindings are delegated tenant roles (docs/spec/01 §3.2); they never reach the gateway snapshot.
+Role bindings are delegated tenant roles (docs/spec/01 §3.3); they never reach the gateway snapshot.
+
+```
+scim_users(id, external_id NULL, user_name UNIQUE, display_name, emails JSONB [{value, primary, type}], active BOOL, updated_at)
+scim_groups(id, external_id NULL, display_name UNIQUE, role NULL, scope_type NULL, scope_id NULL, updated_at)
+scim_group_members(group_id→scim_groups ON DELETE CASCADE, user_id→scim_users ON DELETE CASCADE)   PK(group_id, user_id)
+```
+
+Identities and groups pushed by the identity provider (docs/spec/01 §3.4); mapped groups drive `role_bindings`.
 
 ## Keys
 

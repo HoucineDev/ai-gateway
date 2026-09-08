@@ -62,6 +62,8 @@ class Settings(BaseSettings):
     routing_queue_ref: float = 8.0
     routing_inflight_ref: float = 4.0
 
+    scim_token: str | None = None  # bearer token the identity provider uses on /scim/v2 (docs/spec/01 §3.4)
+
     # Scheduled key rotation (docs/spec/01 §3.2): Fernet key that seals a rotated key's plaintext until pickup.
     # Generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
     key_pickup_secret: str | None = None
