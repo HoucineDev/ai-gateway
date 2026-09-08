@@ -1,4 +1,4 @@
-"""Control API authentication and authorization (docs/spec/01 §3.1; docs/spec/07 "Keycloak OIDC JWT on control API").
+"""Control API authentication and authorization (docs/spec/01 §3.1 global roles, §3.2 delegated roles).
 
 Two credentials are accepted on ``/admin/v1``:
 
@@ -6,12 +6,14 @@ Two credentials are accepted on ``/admin/v1``:
 * ``Authorization: Bearer <JWT>`` — an access token issued by the configured OIDC issuer (Keycloak). The
   signature is verified against the issuer's JWKS; ``iss``, ``exp``, ``iat``, ``sub`` and (when configured)
   ``aud`` are checked. Keycloak realm roles (``realm_access.roles``), client roles of the configured client
-  (``resource_access.<client>.roles``) and a flat ``roles`` claim are then mapped to control-API scopes through
-  ``AIGW_OIDC_ROLE_SCOPES``. A valid token that maps to no scope is refused with 403 ``missing_role``.
+  (``resource_access.<client>.roles``) and a flat ``roles`` claim are then mapped to *global* scopes through
+  ``AIGW_OIDC_ROLE_SCOPES``. Active ``role_bindings`` rows for the token's subject add *delegated* grants that
+  hold only inside one organization, team or project. A subject with neither is refused with 403 ``missing_role``.
 
 Scopes are ``<resource>:<read|write>`` (see ``RESOURCES``). ``*``, ``*:read``, ``*:write`` and ``<resource>:*``
-are accepted as wildcards in the role mapping. Every control-API route declares the scope it needs through
-``require_scope`` (enforced by ``tests/test_admin_oidc.py``); the router-level ``require_admin`` dependency is the
+are accepted as wildcards. Every control-API route declares the scope it needs through ``require_scope`` (enforced
+by ``tests/test_admin_oidc.py``) and then calls ``actor.require(scope, org_id=..., team_id=..., project_id=...)``
+with the target's tenant ids so a delegate cannot reach across tenants; the router-level ``require_admin`` is the
 fail-closed backstop so an undeclared route still needs a credential.
 """
 
@@ -21,6 +23,7 @@ import asyncio
 import logging
 import secrets
 import time
+import uuid
 from dataclasses import dataclass
 
 import httpx
@@ -44,9 +47,65 @@ RESOURCES = (
     "requests",
     "audit",
     "config",
+    "role_bindings",
 )
 ACTIONS = ("read", "write")
 ALL_SCOPES = tuple(f"{r}:{a}" for r in RESOURCES for a in ACTIONS)
+
+# Delegated roles (docs/spec/01 §3.2): what each role may do *inside the tenant it is bound to*.
+DELEGATED_ROLES = ("org_owner", "team_owner", "project_member")
+ROLE_RANK = {"org_owner": 3, "team_owner": 2, "project_member": 1}
+_ROLE_SCOPES: dict[str, frozenset[str]] = {
+    "org_owner": frozenset(
+        {
+            "organizations:*",
+            "teams:*",
+            "projects:*",
+            "keys:*",
+            "models:*",
+            "deployments:*",
+            "prices:read",
+            "budgets:*",
+            "usage:read",
+            "requests:read",
+            "audit:read",
+            "config:read",
+            "role_bindings:*",
+        }
+    ),
+    "team_owner": frozenset(
+        {
+            "organizations:read",
+            "teams:*",
+            "projects:*",
+            "keys:*",
+            "models:read",
+            "deployments:read",
+            "prices:read",
+            "budgets:*",
+            "usage:read",
+            "requests:read",
+            "config:read",
+            "role_bindings:*",
+        }
+    ),
+    "project_member": frozenset(
+        {
+            "organizations:read",
+            "teams:read",
+            "projects:read",
+            "keys:*",
+            "models:read",
+            "deployments:read",
+            "prices:read",
+            "budgets:read",
+            "usage:read",
+            "requests:read",
+            "config:read",
+            "role_bindings:read",
+        }
+    ),
+}
 
 # Asymmetric algorithms only: a JWKS never legitimately carries an HMAC secret, and accepting "none"/HS* would let a
 # client sign tokens with the public key.
@@ -66,19 +125,88 @@ def validate_scope_pattern(pattern: str) -> str:
     return pattern
 
 
+def _matches(patterns: frozenset[str], scope: str) -> bool:
+    resource, _, action = scope.partition(":")
+    return bool(patterns & {"*", scope, f"*:{action}", f"{resource}:*"})
+
+
+@dataclass(frozen=True)
+class Grant:
+    """One active role binding, denormalized so covering a target never needs a lookup."""
+
+    role: str
+    scope_type: str  # organization | team | project
+    org_id: uuid.UUID
+    team_id: uuid.UUID | None = None
+    project_id: uuid.UUID | None = None
+    binding_id: uuid.UUID | None = None
+
+    @property
+    def rank(self) -> int:
+        return ROLE_RANK[self.role]
+
+    @property
+    def patterns(self) -> frozenset[str]:
+        return _ROLE_SCOPES[self.role]
+
+    def covers(self, org_id=None, team_id=None, project_id=None) -> bool:
+        if self.scope_type == "organization":
+            return org_id is not None and org_id == self.org_id
+        if self.scope_type == "team":
+            return team_id is not None and team_id == self.team_id
+        return project_id is not None and project_id == self.project_id
+
+
 @dataclass(frozen=True)
 class Actor:
     type: str  # admin_key | user
-    id: str
-    scopes: frozenset[str] = frozenset({"*"})
+    id: str  # display identity used in audit rows (preferred_username, else sub)
+    scopes: frozenset[str] = frozenset({"*"})  # global scope patterns
     roles: frozenset[str] = frozenset()
+    grants: tuple[Grant, ...] = ()
+    subject: str | None = None  # token `sub`
+    email: str | None = None
+
+    # ---- global gate ----------------------------------------------------
 
     def allows(self, scope: str) -> bool:
-        resource, _, action = scope.partition(":")
-        return bool(self.scopes & {"*", scope, f"*:{action}", f"{resource}:*"})
+        """Gate check: some global scope or some grant includes ``scope`` (tenant not yet known)."""
+        return _matches(self.scopes, scope) or any(_matches(g.patterns, scope) for g in self.grants)
 
     def effective_scopes(self) -> list[str]:
         return [s for s in ALL_SCOPES if self.allows(s)]
+
+    # ---- tenant check ---------------------------------------------------
+
+    def unrestricted(self, scope: str) -> bool:
+        """True when a global scope covers ``scope``: no tenant predicate applies."""
+        return _matches(self.scopes, scope)
+
+    def permits(self, scope: str, *, org_id=None, team_id=None, project_id=None) -> bool:
+        if self.unrestricted(scope):
+            return True
+        return any(_matches(g.patterns, scope) and g.covers(org_id, team_id, project_id) for g in self.grants)
+
+    def require(self, scope: str, *, org_id=None, team_id=None, project_id=None) -> None:
+        """Raise 403 unless ``scope`` is permitted on the target tenant (global targets need a global scope)."""
+        if not self.permits(scope, org_id=org_id, team_id=team_id, project_id=project_id):
+            raise GatewayError(
+                ErrorType.permission,
+                f"Scope {scope} is not granted on this tenant",
+                code="tenant_forbidden",
+                details={"required_scope": scope},
+            )
+
+    def max_rank(self, *, org_id=None, team_id=None, project_id=None) -> int:
+        """Highest delegated rank covering the target; global actors rank above every delegate."""
+        if self.unrestricted("role_bindings:write"):
+            return max(ROLE_RANK.values()) + 1
+        return max((g.rank for g in self.grants if g.covers(org_id, team_id, project_id)), default=0)
+
+    @property
+    def identities(self) -> frozenset[str]:
+        """Strings a role binding's ``subject`` may equal for this actor."""
+        return frozenset(s for s in (self.subject, self.id, self.email) if s)
 
 
 ADMIN_KEY_ACTOR = Actor("admin_key", "admin")
@@ -120,7 +248,12 @@ class OIDCVerifier:
 
     # ---- token verification -------------------------------------------
 
-    async def verify(self, token: str) -> Actor:
+    async def verify(self, token: str, *, allow_unmapped: bool = False) -> Actor:
+        """Validate ``token`` and build the actor with its global scopes.
+
+        With ``allow_unmapped=False`` (default) a token whose roles map to no scope is refused with 403
+        ``missing_role``; ``require_admin`` passes ``True`` because delegated bindings may still grant access.
+        """
         try:
             header = jwt.get_unverified_header(token)
         except jwt.PyJWTError as exc:
@@ -154,15 +287,15 @@ class OIDCVerifier:
         scopes: set[str] = set()
         for role in roles:
             scopes |= self.role_scopes.get(role, frozenset())
-        if not scopes:
-            raise GatewayError(
-                ErrorType.permission,
-                "Token carries no role mapped to a control-API scope",
-                code="missing_role",
-                details={"roles": sorted(roles)},
-            )
+        if not scopes and not allow_unmapped:
+            raise missing_role(roles)
         return Actor(
-            "user", str(claims.get("preferred_username") or claims["sub"]), frozenset(scopes), frozenset(roles)
+            "user",
+            str(claims.get("preferred_username") or claims["sub"]),
+            frozenset(scopes),
+            frozenset(roles),
+            subject=str(claims["sub"]),
+            email=str(claims["email"]) if claims.get("email") else None,
         )
 
     def roles_of(self, claims: dict) -> set[str]:
@@ -240,14 +373,23 @@ def _invalid(reason: str) -> GatewayError:
     return GatewayError(ErrorType.authentication, f"Invalid token: {reason}", code="invalid_token")
 
 
+def missing_role(roles=()) -> GatewayError:
+    return GatewayError(
+        ErrorType.permission,
+        "Token carries no role mapped to a control-API scope and no active role binding",
+        code="missing_role",
+        details={"roles": sorted(roles)},
+    )
+
+
 # ---- FastAPI dependencies ---------------------------------------------
 
 
 async def require_admin(
     request: Request, x_admin_key: str | None = Header(default=None), authorization: str | None = Header(default=None)
 ) -> Actor:
-    """Authenticate the caller (admin key or OIDC bearer). Cached per request by FastAPI, so stacking it under
-    ``require_scope`` costs one verification."""
+    """Authenticate the caller (admin key or OIDC bearer) and attach delegated grants. Cached per request by
+    FastAPI, so stacking it under ``require_scope`` costs one verification and one bindings query."""
     settings = request.app.state.settings
     verifier: OIDCVerifier | None = getattr(request.app.state, "oidc", None)
     if x_admin_key is not None:
@@ -261,7 +403,13 @@ async def require_admin(
                 "Bearer tokens are not accepted: AIGW_OIDC_ISSUER is not configured",
                 code="oidc_not_configured",
             )
-        return await verifier.verify(authorization[7:].strip())
+        actor = await verifier.verify(authorization[7:].strip(), allow_unmapped=True)
+        from aigw.admin.tenancy import load_grants  # local import: tenancy imports Actor from this module
+
+        actor = await load_grants(request.app.state.db, actor)
+        if not actor.scopes and not actor.grants:
+            raise missing_role(actor.roles)
+        return actor
     if not settings.admin_key and verifier is None:
         raise GatewayError(
             ErrorType.unavailable,
@@ -272,7 +420,8 @@ async def require_admin(
 
 
 def require_scope(scope: str):
-    """Dependency factory: authenticate and require ``scope`` (``<resource>:<read|write>``)."""
+    """Dependency factory: authenticate and require ``scope`` (``<resource>:<read|write>``) globally or through
+    some delegated grant. Routes then narrow to the target tenant with ``actor.require(...)``."""
     if scope not in ALL_SCOPES:
         raise ValueError(f"unknown scope {scope!r}")
 
@@ -289,3 +438,20 @@ def require_scope(scope: str):
     dependency.scope = scope  # type: ignore[attr-defined]  # introspected by the route-coverage test
     dependency.__name__ = f"require_scope[{scope}]"
     return dependency
+
+
+__all__ = [
+    "ACTIONS",
+    "ADMIN_KEY_ACTOR",
+    "ALL_SCOPES",
+    "DELEGATED_ROLES",
+    "RESOURCES",
+    "ROLE_RANK",
+    "Actor",
+    "Grant",
+    "OIDCVerifier",
+    "missing_role",
+    "require_admin",
+    "require_scope",
+    "validate_scope_pattern",
+]

@@ -60,6 +60,11 @@ The portal signs in through the same realm (authorization code + PKCE, no librar
 *Sign in with Keycloak*, log in as `carol` and the write actions disappear; `alice` gets them all. The portal reads the
 issuer and client id from `GET /admin/v1/auth/config`, so the build carries no environment-specific settings.
 
+Delegated roles (docs/spec/01 §3.2): besides the global Keycloak roles, a user can be bound as *org owner*, *team owner*
+or *project member* of one tenant (`POST /admin/v1/role-bindings`, or the *Members* panel on Organizations & keys).
+Every control-API route checks the target tenant, and lists are filtered, so a delegate never sees or touches
+another organization. Bindings match the token's `sub`, username or email and take effect on the next request.
+
 Point a real deployment at your vLLM/KServe endpoint through the control API:
 
 ```bash

@@ -8,7 +8,14 @@ All tables have `id UUID PRIMARY KEY` (UUIDv7 generated in application), `create
 organizations(id, name, slug UNIQUE, status, settings JSONB)
 teams(id, org_id→organizations, name, status, settings JSONB)             UNIQUE(org_id, name)
 projects(id, org_id, team_id→teams, name, status, settings JSONB)         UNIQUE(team_id, name)
+role_bindings(id, subject TEXT (Keycloak sub | username | email), subject_kind ENUM(user, service_account),
+       role ENUM(org_owner, team_owner, project_member), scope_type ENUM(organization, team, project), scope_id UUID,
+       org_id→organizations, team_id NULL, project_id NULL (denormalized from the scope for predicates),
+       status ENUM(active, revoked), created_by TEXT, revoked_at TIMESTAMPTZ NULL)
+                                                                         UNIQUE(subject, role, scope_type, scope_id)
 ```
+
+Role bindings are delegated tenant roles (docs/spec/01 §3.2); they never reach the gateway snapshot.
 
 ## Keys
 

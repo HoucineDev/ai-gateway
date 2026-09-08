@@ -10,7 +10,7 @@ Every change also updates `README.md` (if user-facing) and `docs/runbook.md` (op
 - Money is `Decimal` / `NUMERIC(20,8)` in PostgreSQL only. Valkey never decides a monetary limit.
 - Never fail over to another deployment after the first client-visible byte. Ambiguous upstream outcomes settle at the reservation.
 - Every control-API write must call `audit(...)` and, if it changes the gateway snapshot, `bump_config(...)`.
-- Every control-API route declares its scope with `require_scope("<resource>:<read|write>")` (`tests/test_admin_oidc.py` fails otherwise).
+- Every control-API route declares its scope with `require_scope("<resource>:<read|write>")` (`tests/test_admin_oidc.py` fails otherwise), then calls `actor.require(scope, org_id=…, team_id=…, project_id=…)` on the target and filters lists with `tenancy.visible(...)` so delegated roles stay inside their tenant (`tests/test_admin_delegation.py`).
 - Every tenant-owned query carries the org/project scope in its WHERE clause.
 - Adapters reject unsupported parameters (`UnsupportedParameter`); never silently drop them.
 
@@ -39,7 +39,7 @@ Local dev env: `AIGW_DATABASE_URL`, `AIGW_VALKEY_URL`, `AIGW_ADMIN_KEY` (see `.e
 | `src/aigw/core` | canonical types (`types.py`), errors/classification, pricing, token estimation, secret refs |
 | `src/aigw/adapters` | `base.py` contract + `openai_compat`, `openai`, `anthropic`; `registry.py` |
 | `src/aigw/gateway` | `snapshot` (config cache), `auth`, `ratelimit` (Valkey Lua), `accounting` (reserve/settle ledger), `router`, `pipeline` (orchestration), `routes`, `metrics` |
-| `src/aigw/admin` | control API `/admin/v1`, `auth` (admin key / Keycloak OIDC → scopes, `require_scope`), `service` (audit, config bump) |
+| `src/aigw/admin` | control API `/admin/v1`, `auth` (admin key / Keycloak OIDC → global scopes + delegated grants, `require_scope`, `Actor.require`), `tenancy` (grant loading, SQL visibility predicates), `service` (audit, config bump) |
 | `src/aigw/worker` | outbox consumer, pending-attempt reconciliation, key expiry |
 | `src/aigw/db` | SQLAlchemy models, Alembic migrations (`src/aigw/migrations`) |
 | `portal/` | React 18 + Vite + Tailwind v4 + TanStack Query; tokens in `src/index.css`; API client `src/lib/api.ts`; Keycloak PKCE login `src/lib/auth.ts`, scopes via `src/lib/session.tsx` (`useSession().can`, `<Can>`) |
@@ -55,7 +55,7 @@ Local dev env: `AIGW_DATABASE_URL`, `AIGW_VALKEY_URL`, `AIGW_ADMIN_KEY` (see `.e
 
 ## Roadmap (docs/spec/07-parity-backlog.md)
 
-Phase 2 done: Keycloak OIDC roles on control API. Next: active health checks, latency-EWMA + vLLM queue-pressure routing,
+Phase 2 done: Keycloak OIDC roles on control API, delegated tenant roles, portal SSO. Next: active health checks, latency-EWMA + vLLM queue-pressure routing,
 exact response cache, Azure OpenAI / Gemini-Vertex / Bedrock adapters, provider invoice reconciliation, load-test harness.
-Phase 3: SCIM, delegated roles, scheduled key rotation, guardrail pipeline, scoped logging exporters, approvals, retention.
+Phase 3: SCIM, scheduled key rotation, guardrail pipeline, scoped logging exporters, approvals, retention.
 Phase 4: native Anthropic/Gemini/Bedrock ingress, media APIs, files/batches, MCP/A2A, agent run limits, multi-region.

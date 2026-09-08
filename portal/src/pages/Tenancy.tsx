@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, KeyRound, RotateCw, Ban } from "lucide-react";
-import { api, fmtDate, type Org, type Team, type Project } from "../lib/api";
+import { Plus, KeyRound, RotateCw, Ban, UserMinus } from "lucide-react";
+import { api, fmtDate, type Org, type Team, type Project, type RoleBinding } from "../lib/api";
 import { useSession } from "../lib/session";
 import { Badge, CopyOnce, Empty, ErrorBanner, Field, Loading, Modal, Page, TableWrap } from "../components/ui";
 
@@ -106,6 +106,8 @@ export default function Tenancy() {
         )}
       </section>
 
+      <Members org={org} team={team} project={project} />
+
       <Modal title={{ org: "New organization", team: "New team", project: "New project", key: "Issue virtual key" }[dialog ?? "org"]} open={dialog !== null} onClose={() => setDialog(null)}>
         <form onSubmit={(e) => { e.preventDefault(); create.mutate(); }}>
           <ErrorBanner error={create.error} />
@@ -117,6 +119,66 @@ export default function Tenancy() {
         </form>
       </Modal>
     </Page>
+  );
+}
+
+/** Delegated roles (docs/spec/01 §3.2) on the deepest selected tenant: org owners, team owners, project members. */
+function Members({ org, team, project }: { org: Org | null; team: Team | null; project: Project | null }) {
+  const { can } = useSession();
+  const qc = useQueryClient();
+  const target = project
+    ? { scope_type: "project" as const, scope_id: project.id, label: `project ${project.name}`, role: "project_member" as const }
+    : team
+      ? { scope_type: "team" as const, scope_id: team.id, label: `team ${team.name}`, role: "team_owner" as const }
+      : org
+        ? { scope_type: "organization" as const, scope_id: org.id, label: `organization ${org.name}`, role: "org_owner" as const }
+        : null;
+  const bindings = useQuery({
+    queryKey: ["role-bindings", target?.scope_type, target?.scope_id],
+    queryFn: () => api.roleBindings({ scope_type: target!.scope_type, scope_id: target!.scope_id }),
+    enabled: Boolean(target),
+  });
+  const [subject, setSubject] = useState("");
+  const invalidate = () => qc.invalidateQueries({ queryKey: ["role-bindings"] });
+  const add = useMutation({
+    mutationFn: () => api.createRoleBinding({ subject: subject.trim(), role: target!.role, scope_type: target!.scope_type, scope_id: target!.scope_id }),
+    onSuccess: () => { setSubject(""); invalidate(); },
+  });
+  const revoke = useMutation({ mutationFn: (id: string) => api.revokeRoleBinding(id), onSuccess: invalidate });
+  if (!target) return null;
+  const roleLabel: Record<RoleBinding["role"], string> = { org_owner: "org owner", team_owner: "team owner", project_member: "project member" };
+  return (
+    <section className="card" aria-label="Members">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold">Members · {target.label}</h2>
+        <span className="text-xs text-muted-foreground">Keycloak users bound here; global roles (aigw-admin/operator/viewer) are managed in Keycloak.</span>
+      </div>
+      <ErrorBanner error={bindings.error ?? add.error ?? revoke.error} />
+      {bindings.isPending && <Loading />}
+      {bindings.data && (
+        <ul className="divide-y divide-border">
+          {bindings.data.data.length === 0 && <li className="py-2 text-sm text-muted-foreground">No delegated members. Only global roles can act here.</li>}
+          {bindings.data.data.map((b) => (
+            <li key={b.id} className="flex items-center justify-between gap-3 py-2 text-sm">
+              <span><span className="mono">{b.subject}</span> <span className="badge border-accent/40 text-accent bg-accent/10 ml-2">{roleLabel[b.role]}</span>
+                <span className="ml-2 text-xs text-muted-foreground">added by {b.created_by} · {fmtDate(b.created_at)}</span></span>
+              {can("role_bindings:write") && <button className="btn btn-ghost text-destructive" aria-label={`Remove ${b.subject}`}
+                onClick={() => { if (confirm(`Remove ${b.subject} as ${roleLabel[b.role]} of ${target.label}?`)) revoke.mutate(b.id); }}><UserMinus size={16} /></button>}
+            </li>
+          ))}
+        </ul>
+      )}
+      {can("role_bindings:write") && (
+        <form className="mt-3 flex flex-wrap items-end gap-2" onSubmit={(e) => { e.preventDefault(); if (subject.trim()) add.mutate(); }}>
+          <div className="min-w-64 flex-1">
+            <Field label={`Add ${roleLabel[target.role]}`} hint="Keycloak username, email or subject id (exact match)">
+              {(id) => <input id={id} className="input mono" value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="carol or carol@example.com" />}
+            </Field>
+          </div>
+          <button className="btn btn-secondary mb-3" disabled={add.isPending || !subject.trim()}><Plus size={16} aria-hidden="true" /> Add</button>
+        </form>
+      )}
+    </section>
   );
 }
 

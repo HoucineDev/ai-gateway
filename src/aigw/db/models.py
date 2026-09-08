@@ -79,6 +79,29 @@ class Project(Base):
     created_at: Mapped[datetime] = _created()
 
 
+class RoleBinding(Base):
+    """Delegated tenant role (docs/spec/01 §3.2). Rows are revoked, never deleted, so the audit trail stays whole."""
+
+    __tablename__ = "role_bindings"
+    __table_args__ = (
+        UniqueConstraint("subject", "role", "scope_type", "scope_id"),
+        Index("ix_role_bindings_subject_status", "subject", "status"),
+    )
+    id: Mapped[uuid.UUID] = _pk()
+    subject: Mapped[str] = mapped_column(String(320))  # Keycloak sub, preferred_username or email
+    subject_kind: Mapped[str] = mapped_column(String(20), default="user")  # user | service_account
+    role: Mapped[str] = mapped_column(String(30))  # org_owner | team_owner | project_member
+    scope_type: Mapped[str] = mapped_column(String(20))  # organization | team | project
+    scope_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    org_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id"), index=True)
+    team_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    project_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    status: Mapped[str] = mapped_column(String(20), default="active")  # active | revoked
+    created_by: Mapped[str] = mapped_column(String(200))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = _created()
+
+
 class VirtualKey(Base):
     __tablename__ = "virtual_keys"
     id: Mapped[uuid.UUID] = _pk()

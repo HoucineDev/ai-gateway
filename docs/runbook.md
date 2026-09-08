@@ -92,7 +92,10 @@ Provider credentials are secret references on deployments (`env:NAME`), never st
 | Take a deployment out of rotation | `POST /admin/v1/deployments/{id}/cooldown {"seconds": 600}` or PATCH `status: disabled` |
 | Raise a budget temporarily | `POST /admin/v1/budgets/{id}/temporary-increase {"amount": "50", "until": "<RFC3339>"}` |
 | Add a price version | `POST /admin/v1/prices` (insert-only, versioned by `effective_from`) |
-| Grant portal access | assign realm role `aigw-admin` / `aigw-operator` / `aigw-viewer` in Keycloak; scopes take effect on the next token |
+| Grant portal access (global) | assign realm role `aigw-admin` / `aigw-operator` / `aigw-viewer` in Keycloak; scopes take effect on the next token |
+| Delegate one tenant | portal → Organizations & keys → select org/team/project → *Members* → add username/email, or `POST /admin/v1/role-bindings {"subject":"carol","role":"team_owner","scope_type":"team","scope_id":…}`; immediate, no new token needed |
+| Remove a delegate | *Members* → remove, or `POST /admin/v1/role-bindings/{id}/revoke`; their next request fails with 403 `missing_role` unless a global role remains |
+| See who can act on a tenant | `GET /admin/v1/role-bindings?scope_type=&scope_id=` (`include_revoked=true` for history); a user's own view: `GET /admin/v1/me` → `grants` |
 | Who did what | `GET /admin/v1/audit?target_type=&target_id=` — `actor_type=user` + Keycloak username, or `admin_key` |
 | Explain a request | `GET /admin/v1/requests/{request_id}` — attempts, routing decision, usage |
 | Verify a restore | `aigw verify-restore` (row counts, latest audit event, budget totals = Σ usage) |
@@ -107,6 +110,9 @@ Provider credentials are secret references on deployments (`env:NAME`), never st
 | 503 `oidc_unavailable` | admin role cannot fetch the JWKS: check `AIGW_OIDC_JWKS_URL` (inside compose use `http://keycloak:8080/...`) |
 | 403 `missing_role` | token valid but no role maps to a scope: assign a realm role or extend `AIGW_OIDC_ROLE_SCOPES` |
 | 403 `insufficient_scope` | caller lacks `<resource>:write`; the portal hides such actions, curl calls do not |
+| 403 `tenant_forbidden` | the caller has the scope somewhere, but not on this organization/team/project (delegated role on another tenant, or a global-only action such as creating an organization, a global model or a price) |
+| 403 `rank_exceeded` | a delegate tried to grant or revoke a role above their own at that tenant (team owners manage team owners and project members, not org owners) |
+| 400 `role_scope_mismatch` | `org_owner` binds to an organization, `team_owner` to a team, `project_member` to a project |
 | Portal login loops back to Settings with "State mismatch" | sessionStorage cleared mid-flow (private window closed, different tab); sign in again from one tab |
 | Gateway `readyz` 503 `config` | no snapshot yet or staleness bound exceeded: check database reachability and `aigw migrate` |
 | `independence_gate.py` fails on `pip freeze` | litellm installed in the *environment*, not the repo; use a clean venv |
@@ -121,3 +127,6 @@ Provider credentials are secret references on deployments (`env:NAME`), never st
 - 2026-09-08 — `oidc` compose profile with a dev realm; `scripts/oidc_smoke.py`; portal signs in with Keycloak
   (PKCE) and hides actions by scope; `GET /admin/v1/auth/config`; signed-out pages show a sign-in prompt;
   mock-upstream `GET /healthz` and correct compose healthchecks for mock-upstream and worker.
+- 2026-09-08 — delegated tenant roles: `role_bindings` table (migration `f1eac2b1733d`, run `aigw migrate`),
+  `POST/GET /admin/v1/role-bindings`, `…/revoke`; every route checks the target tenant, lists are filtered;
+  portal *Members* panel; new error codes `tenant_forbidden`, `rank_exceeded`, `role_scope_mismatch`.

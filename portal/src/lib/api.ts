@@ -38,7 +38,13 @@ export type AuditEvent = {
   id: string; actor_type: string; actor_id: string; action: string; target_type: string; target_id: string | null;
   before: unknown; after: unknown; created_at: string;
 };
-export type Me = { actor_type: "admin_key" | "user"; actor_id: string; roles: string[]; scopes: string[] };
+export type Grant = { role: string; scope_type: string; scope_id: string; org_id: string; team_id: string | null; project_id: string | null };
+export type Me = { actor_type: "admin_key" | "user"; actor_id: string; roles: string[]; scopes: string[]; grants: Grant[] };
+export type RoleBinding = {
+  id: string; subject: string; subject_kind: string; role: "org_owner" | "team_owner" | "project_member";
+  scope_type: "organization" | "team" | "project"; scope_id: string; org_id: string; team_id: string | null; project_id: string | null;
+  status: string; created_by: string; created_at: string; revoked_at: string | null;
+};
 export type AuthConfig = { admin_key: boolean; oidc: OidcConfig | null };
 export type Overview = {
   since: string; requests: number; cost: string; tokens: number; p95_latency_ms: number | null; failed: number;
@@ -122,6 +128,10 @@ export const api = {
   request: (id: string) => call<{ request_id: string; attempts: Attempt[]; usage: UsageEvent[] }>("GET", `/requests/${id}`),
   audit: (p: { org_id?: string; target_type?: string; target_id?: string; limit?: string }) => call<{ data: AuditEvent[] }>("GET", "/audit", undefined, p),
   configVersion: () => call<{ version: number }>("GET", "/config/version"),
+  roleBindings: (p: { scope_type?: string; scope_id?: string; org_id?: string; subject?: string }) => call<{ data: RoleBinding[] }>("GET", "/role-bindings", undefined, p),
+  createRoleBinding: (b: { subject: string; role: RoleBinding["role"]; scope_type: RoleBinding["scope_type"]; scope_id: string; subject_kind?: string }) =>
+    call<RoleBinding>("POST", "/role-bindings", b),
+  revokeRoleBinding: (id: string) => call<RoleBinding>("POST", `/role-bindings/${id}/revoke`),
 };
 
 export const fmtMoney = (v: string | number | null | undefined, digits = 4) =>

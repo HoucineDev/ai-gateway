@@ -65,6 +65,7 @@ All write operations produce an append-only `audit_events` row with actor, actio
 | config | `GET /config/version` | monotonically increasing version the gateway polls |
 | me | `GET /me` | caller identity: `actor_type`, `actor_id`, `roles`, effective `scopes` (any authenticated caller) |
 | auth | `GET /auth/config` | unauthenticated: `{admin_key: bool, oidc: {issuer, client_id, audience} | null}` for the portal's login flow |
+| role-bindings | `POST /role-bindings`, `GET /role-bindings?subject&org_id&scope_type&scope_id`, `POST /role-bindings/{id}/revoke` | delegated tenant roles (§3.2) |
 
 ### 3.1 Authentication and scopes
 
@@ -95,6 +96,33 @@ token, no mapped role) and `insufficient_scope`. Audit rows record `actor_type=u
 (falling back to `sub`). The Keycloak client must keep the `basic` client scope (Keycloak ≥ 24 emits `sub` through
 it) and the `roles` scope; `deploy/compose/keycloak/realm-aigw.json` is a reference realm. Delegated tenant-level roles (org owner, project member) are a separate Phase 2 item and will
 narrow these scopes by tenant; this section is global role-based access.
+
+### 3.2 Delegated roles (tenant-scoped)
+
+Global roles (§3.1) grant scopes everywhere. A **role binding** grants a role to a subject inside one tenant:
+
+| Role | Bound to | Grants inside that tenant |
+|------|----------|---------------------------|
+| `org_owner` | organization | everything below it: teams, projects, keys, budgets, usage, requests, audit, org-scoped models and deployments, role bindings of equal or lower rank |
+| `team_owner` | team | the team record, its projects, keys, budgets, usage, requests, `team_owner`/`project_member` bindings within the team |
+| `project_member` | project | the project record (read), its keys (read/write), its budgets, usage and requests (read) |
+
+A *subject* is matched against the token's `sub`, `preferred_username` and `email` (exact); Keycloak service
+accounts (`service-account-<client>`) bind the same way with `subject_kind: service_account`. Bindings are rows in
+`role_bindings` (docs/spec/02), looked up on every control-API request, so a revoke is immediate. Global models
+(`org_id` null) and prices stay read-only for delegates; writing them needs a global scope.
+
+Authorization is evaluated in two steps. The route's `require_scope` gate passes when either a global scope or
+any binding's role includes the scope. The route then calls `actor.require(scope, org_id, team_id, project_id)`
+with the target's tenant ids: a global scope passes unconditionally; otherwise some binding must both include the
+scope and *cover* the target (an organization binding covers its org, a team binding its team, a project binding
+its project). Failure is 403 `tenant_forbidden`. List endpoints apply the same rule as a SQL predicate so a
+delegate only sees rows inside their tenants. A subject with neither a mapped global role nor an active binding
+is refused with 403 `missing_role`.
+
+Creating a binding requires `role_bindings:write` on the target tenant and, for delegates, a rank at or above
+the role being granted at that target (`org_owner` > `team_owner` > `project_member`), so a team owner can add
+project members but cannot make org owners. Every binding write is audited; `GET /me` lists the caller's grants.
 
 Portal login: authorization-code flow with PKCE against the public client (`portal/src/lib/auth.ts`), tokens kept in
 `sessionStorage`, refreshed with the refresh token 30 s before expiry; the portal discovers issuer and client id from

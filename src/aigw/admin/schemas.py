@@ -37,6 +37,14 @@ class NamePatch(BaseModel):
     settings: dict[str, Any] | None = None
 
 
+class RoleBindingCreate(BaseModel):
+    subject: str = Field(min_length=1, max_length=320)  # Keycloak sub, preferred_username or email
+    subject_kind: Literal["user", "service_account"] = "user"
+    role: Literal["org_owner", "team_owner", "project_member"]
+    scope_type: Literal["organization", "team", "project"]
+    scope_id: str
+
+
 class KeyCreate(BaseModel):
     name: str
     expires_at: datetime | None = None

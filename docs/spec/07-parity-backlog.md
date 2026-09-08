@@ -13,7 +13,7 @@ Feature families from the proposal's reference inventory, with the phase in whic
 | Key rotation with grace period | P1 (API) / P3 (scheduled) | |
 | Admin key auth | P1 | |
 | Keycloak OIDC JWT on control API | P2 ✓ | JWKS validation, roles claim → scopes (docs/spec/01 §3.1, `tests/test_admin_oidc.py`) |
-| Delegated roles (org owner, team owner, project member, service account) | P2 | |
+| Delegated roles (org owner, team owner, project member, service account) | P2 ✓ | `role_bindings`, tenant-scoped `actor.require` (docs/spec/01 §3.2, `tests/test_admin_delegation.py`) |
 | SCIM 2.0 provisioning service | P3 | separate deliverable |
 | CIDR restrictions, private admin ingress, required metadata | P2 | |
 
