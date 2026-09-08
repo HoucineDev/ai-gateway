@@ -513,6 +513,7 @@ async def delete_user(id: str, request: Request):  # noqa: A002
             before=user_view_plain(u),
             after={"revoked_bindings": revoked},
         )
+        await s.flush()  # membership deletes first: no relationship() orders them before the parent
         await s.delete(u)
     return Response(status_code=204)
 
@@ -717,6 +718,7 @@ async def delete_group(id: str, request: Request):  # noqa: A002
             g.id,
             before={"displayName": g.display_name, "members": [m.user_name for m in members]},
         )
+        await s.flush()  # membership deletes first: no relationship() orders them before the parent
         await s.delete(g)
     return Response(status_code=204)
 
