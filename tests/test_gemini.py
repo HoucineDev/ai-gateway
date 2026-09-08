@@ -199,13 +199,9 @@ async def test_google_ai_api_key(client, app, tenant):
 
 async def test_service_account_token_exchange(client, app, tenant):
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    pem = (
-        key.private_key_bytes
-        if False
-        else key.private_bytes(
-            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
-        ).decode()
-    )
+    pem = key.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+    ).decode()
     sa = {
         "type": "service_account",
         "client_email": "aigw@proj-1.iam.gserviceaccount.com",
