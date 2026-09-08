@@ -54,18 +54,18 @@ Rules: `usage` may arrive before or after `finish`; `end` is always last; an ada
 
 ## 4. Request translation
 
-| Canonical | openai_compat / openai / azure_openai | anthropic | gemini |
-|-----------|------------------------|-----------|--------|
-| `messages[system]` | passed as role `system` | concatenated into top-level `system` | `systemInstruction.parts[text]` |
-| `max_tokens` | `max_tokens` (`max_completion_tokens` for openai) | `max_tokens` (required; default from deployment `capabilities.default_max_tokens`, else 4096) | `generationConfig.maxOutputTokens` |
-| `tools` (function) | as-is | `tools[{name, description, input_schema}]` | `tools[{functionDeclarations[{name, description, parameters}]}]` (JSON-Schema-only keywords stripped) |
-| `tool_choice` | as-is | `{"type": auto/any/tool}`; `none` → tools omitted | `toolConfig.functionCallingConfig.mode` AUTO/ANY/NONE (+ `allowedFunctionNames`) |
-| assistant `tool_calls` | as-is | `content[{type: tool_use}]` | `contents[{role: model, parts[{functionCall}]}]` |
-| role `tool` result | as-is | user message with `tool_result` block (consecutive results merged) | user content with `functionResponse{name, response}` (name resolved from the matching `tool_call_id`; consecutive merged) |
-| `response_format.json_schema` | as-is | rejected unless `capabilities.json_schema` (structured outputs via forced tool is Phase 2) | `generationConfig.responseMimeType=application/json` + `responseSchema` |
-| `stop` | `stop` | `stop_sequences` | `generationConfig.stopSequences` |
-| `image_url` parts | as-is | `image.source.url` or base64 | `inlineData` (data URL) or `fileData` |
-| unsupported field | `UnsupportedParameter` → 400 | same | same (`logprobs`, `top_logprobs`, `extra_body`) |
+| Canonical | openai_compat / openai / azure_openai | anthropic | gemini | bedrock (Converse) |
+|-----------|------------------------|-----------|--------|--------------------|
+| `messages[system]` | passed as role `system` | concatenated into top-level `system` | `systemInstruction.parts[text]` | top-level `system[{text}]` |
+| `max_tokens` | `max_tokens` (`max_completion_tokens` for openai) | `max_tokens` (required; default from deployment `capabilities.default_max_tokens`, else 4096) | `generationConfig.maxOutputTokens` | `inferenceConfig.maxTokens` (default 4096) |
+| `tools` (function) | as-is | `tools[{name, description, input_schema}]` | `tools[{functionDeclarations[{name, description, parameters}]}]` (JSON-Schema-only keywords stripped) | `toolConfig.tools[{toolSpec{name, description, inputSchema.json}}]` |
+| `tool_choice` | as-is | `{"type": auto/any/tool}`; `none` → tools omitted | `toolConfig.functionCallingConfig.mode` AUTO/ANY/NONE (+ `allowedFunctionNames`) | `toolConfig.toolChoice` auto/any/tool; `none` → tools omitted |
+| assistant `tool_calls` | as-is | `content[{type: tool_use}]` | `contents[{role: model, parts[{functionCall}]}]` | `content[{toolUse{toolUseId, name, input}}]` |
+| role `tool` result | as-is | user message with `tool_result` block (consecutive results merged) | user content with `functionResponse{name, response}` (name resolved from the matching `tool_call_id`; consecutive merged) | user `content[{toolResult{toolUseId, content[{json}|{text}]}}]` (consecutive merged) |
+| `response_format.json_schema` | as-is | rejected unless `capabilities.json_schema` (structured outputs via forced tool is Phase 2) | `generationConfig.responseMimeType=application/json` + `responseSchema` | rejected (no native JSON mode) |
+| `stop` | `stop` | `stop_sequences` | `generationConfig.stopSequences` | `inferenceConfig.stopSequences` |
+| `image_url` parts | as-is | `image.source.url` or base64 | `inlineData` (data URL) or `fileData` | `image{format, source.bytes}` (data URLs only; remote URLs rejected) |
+| unsupported field | `UnsupportedParameter` → 400 | same | same (`logprobs`, `top_logprobs`, `extra_body`) | same (+ `response_format`, `seed`, penalties) |
 
 Unsupported fields are rejected, never silently dropped (proposal: "reject unsupported fields or expose explicit provider extensions").
 
@@ -90,13 +90,27 @@ PROHIBITED_CONTENT/SPII→content_filter; a response without candidates and with
 reasoning), `cachedContentTokenCount`. Gemini returns whole function calls in one chunk, so streamed tool calls arrive
 as a single delta with full arguments. The active health probe is `GET` on the model resource.
 
+### 4.3 Amazon Bedrock specifics
+
+`bedrock` uses the Converse API: `{base_url or https://bedrock-runtime.{capabilities.region, default us-east-1}.amazonaws.com}/
+model/{provider_model}/converse` (`converse-stream` for streams, decoded from the AWS binary event stream by
+`aigw.adapters.eventstream`; `invoke` for embeddings with Titan `inputText` or Cohere `texts` bodies). `provider_model` is
+the Bedrock model id or inference-profile id (`:` is URI-encoded, signed double-encoded). Stop reasons map end_turn/
+stop_sequence→stop, max_tokens→length, tool_use→tool_calls, guardrail_intervened/content_filtered→content_filter; stream
+exceptions map throttlingException→rate_limited, serviceUnavailableException→overloaded, validationException→
+invalid_request. Usage: `inputTokens` (+ cache read/write) and `outputTokens`. The request body is serialised once to
+bytes so the signed payload equals the sent payload. The active health probe is `GET /foundation-models/{id}` on the
+control plane (`https://bedrock.{region}.amazonaws.com`, override `capabilities.control_url`).
+
 ## 5. Authentication
 
 `credential_ref` formats: `env:VAR_NAME` (alpha), `openbao:<mount>/<path>#<key>` (Phase 2), `none` (unauthenticated local endpoints). Resolution happens in `aigw.core.secrets` and the resolved value is never logged or persisted. `azure_openai` sends the resolved credential as the `api-key` header, or as an Entra ID bearer token when
 `capabilities.auth = "bearer"`. `gemini` sends it as `x-goog-api-key` (`api_key`, Google AI default), as an OAuth2
 bearer token (`bearer`, Vertex default), or — `capabilities.auth = "service_account"` — treats it as a service-account
 key file and performs the RFC 7523 JWT bearer grant against the key's `token_uri` (override `capabilities.token_url`),
-caching the access token until a minute before expiry. Cloud signing (Bedrock SigV4, Vertex workload identity) is a per-adapter concern added with those adapters.
+caching the access token until a minute before expiry. `bedrock` signs every request with SigV4 (`aigw.adapters.sigv4`,
+owned implementation validated against the AWS reference vector): the credential is `ACCESS_KEY_ID:SECRET_ACCESS_KEY
+[:SESSION_TOKEN]` or the equivalent JSON; `capabilities.auth = "bearer"` sends a Bedrock API key instead. Cloud signing (Bedrock SigV4, Vertex workload identity) is a per-adapter concern added with those adapters.
 
 ## 6. Error classification
 

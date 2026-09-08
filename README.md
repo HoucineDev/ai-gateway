@@ -11,7 +11,7 @@ Status: **Phase 1 functional alpha** (see `docs/spec/07-parity-backlog.md`). The
 | Area | Alpha |
 |------|-------|
 | Inference API | OpenAI-compatible `/v1/chat/completions` (streaming, tools, JSON modes), `/v1/embeddings`, `/v1/models` |
-| Providers | `openai_compat` (vLLM, KServe, TGI, Ollama…), `openai`, `anthropic`, `azure_openai`, `gemini` (Vertex AI / Google AI Studio) — direct HTTP, owned translation |
+| Providers | `openai_compat` (vLLM, KServe, TGI, Ollama…), `openai`, `anthropic`, `azure_openai`, `gemini` (Vertex AI / Google AI Studio), `bedrock` (Converse, owned SigV4) — direct HTTP, owned translation |
 | Tenancy | organizations → teams → projects → virtual keys (hashed, expiry, rotation with grace, revocation ≤ 1 s) |
 | Money | PostgreSQL ledger: reserve max cost before dispatch, settle actual after; per org/team/project/key budgets (total/daily/monthly), temporary increases, soft alerts; owned versioned price registry |
 | Reliability | capability-aware routing, priority + weighted selection, retries, cooldowns, fallback chains — never after the first client byte; ambiguous outcomes settle conservatively |

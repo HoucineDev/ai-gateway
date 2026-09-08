@@ -5,6 +5,7 @@ import httpx
 from aigw.adapters.anthropic import AnthropicAdapter
 from aigw.adapters.azure_openai import AzureOpenAIAdapter
 from aigw.adapters.base import BaseHTTPAdapter
+from aigw.adapters.bedrock import BedrockAdapter
 from aigw.adapters.gemini import GeminiAdapter
 from aigw.adapters.openai import OpenAIAdapter
 from aigw.adapters.openai_compat import OpenAICompatAdapter
@@ -22,6 +23,7 @@ class AdapterRegistry:
             "anthropic": AnthropicAdapter(client, **kw),
             "azure_openai": AzureOpenAIAdapter(client, **kw),
             "gemini": GeminiAdapter(client, **kw),
+            "bedrock": BedrockAdapter(client, **kw),
         }
 
     def get(self, provider: str) -> BaseHTTPAdapter:

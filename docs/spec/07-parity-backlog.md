@@ -70,7 +70,7 @@ Feature families from the proposal's reference inventory, with the phase in whic
 | Anthropic | P1 |
 | Azure OpenAI | P2 ✓ (`azure_openai`, docs/spec/03 §4.1, `tests/test_azure.py`) |
 | Gemini / Vertex | P2 ✓ (`gemini`: Vertex AI + Google AI Studio, docs/spec/03 §4.2, `tests/test_gemini.py`) |
-| Bedrock | P2 |
+| Bedrock | P2 ✓ (`bedrock`: Converse + SigV4 + event stream, docs/spec/03 §4.3, `tests/test_bedrock.py`) |
 | Mistral, Cohere, others | on demand |
 
 ## Logging, audit and observability

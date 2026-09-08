@@ -357,6 +357,170 @@ async def token(request: Request):
     return {"access_token": SA_TOKEN, "expires_in": 3600, "token_type": "Bearer"}
 
 
+AWS_ACCESS, AWS_SECRET, BEDROCK_API_KEY = "AKIATESTACCESSKEY", "test-secret-key", "bedrock-api-key"
+
+
+async def _bedrock_auth(request: Request, body: bytes):
+    """Accept a valid SigV4 signature (recomputed with the test secret) or the test API key."""
+    from datetime import UTC, datetime
+
+    from aigw.adapters import sigv4
+
+    auth = request.headers.get("authorization", "")
+    STATE["last_headers"] = {k: v for k, v in request.headers.items() if k.startswith("x-amz") or k == "authorization"}
+    STATE["sig_ok"] = False
+    if auth == f"Bearer {BEDROCK_API_KEY}":
+        STATE["sig_ok"] = True
+        return None
+    try:
+        parts = sigv4.parse_authorization(auth)
+        access, date, region, service, _ = parts["Credential"].split("/")
+        signed = parts["SignedHeaders"].split(";")
+        amz_date = request.headers["x-amz-date"]
+        assert access == AWS_ACCESS and service == "bedrock"
+        assert (
+            abs((datetime.now(UTC) - datetime.strptime(amz_date, "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)).total_seconds())
+            < 900
+        )
+        raw_path = request.scope.get("raw_path", b"").decode("latin-1") or request.url.path
+        url = f"http://{request.headers.get('host', 'mock')}{raw_path}" + (
+            f"?{request.url.query}" if request.url.query else ""
+        )
+        creq = sigv4.canonical_request(request.method, url, dict(request.headers), signed, sigv4.sha256_hex(body))
+        sts = "\n".join(
+            [sigv4.ALGORITHM, amz_date, f"{date}/{region}/{service}/aws4_request", sigv4.sha256_hex(creq.encode())]
+        )
+        import hashlib
+        import hmac
+
+        expected = hmac.new(
+            sigv4.signing_key(AWS_SECRET, date, region, service), sts.encode(), hashlib.sha256
+        ).hexdigest()
+        assert hmac.compare_digest(expected, parts["Signature"])
+    except Exception as exc:  # noqa: BLE001 - any defect in the signature is a 403, like AWS
+        return JSONResponse(
+            {"message": f"The request signature we calculated does not match ({type(exc).__name__})"}, status_code=403
+        )
+    STATE["sig_ok"] = True
+    STATE["sig_region"] = region
+    return None
+
+
+def _bedrock_last_text(body: dict) -> str:
+    msgs = body.get("messages") or []
+    last = msgs[-1] if msgs else {}
+    return " ".join(b.get("text", "") for b in last.get("content", []) if isinstance(b, dict) and "text" in b)
+
+
+@mock.post("/model/{model}/converse")
+async def bedrock_converse(model: str, request: Request):
+    raw = await request.body()
+    denied = await _bedrock_auth(request, raw)
+    if denied:
+        return denied
+    body = json.loads(raw)
+    STATE["calls"] += 1
+    STATE["last_body"] = body
+    STATE["last_model"] = model
+    prompt = _bedrock_last_text(body)
+    if "[fail:" in prompt:
+        code = int(prompt.split("[fail:")[1].split("]")[0])
+        return JSONResponse(
+            {"message": f"mock failure {code}"},
+            status_code=code,
+            headers={"x-amzn-errortype": "ThrottlingException" if code == 429 else "ServiceUnavailableException"},
+        )
+    text = f"Echo: {prompt}"
+    usage = {"inputTokens": 12, "outputTokens": len(text) // 4 + 1, "totalTokens": 12 + len(text) // 4 + 1}
+    if "[tool]" in prompt:
+        content = [{"toolUse": {"toolUseId": "tooluse_1", "name": "get_weather", "input": {"city": "Lyon"}}}]
+        stop = "tool_use"
+    else:
+        content = [{"text": text}]
+        stop = "end_turn"
+    return JSONResponse(
+        {
+            "output": {"message": {"role": "assistant", "content": content}},
+            "stopReason": stop,
+            "usage": usage,
+            "metrics": {"latencyMs": 3},
+        },
+        headers={"x-amzn-requestid": f"req-{uuid.uuid4().hex[:8]}"},
+    )
+
+
+@mock.post("/model/{model}/converse-stream")
+async def bedrock_converse_stream(model: str, request: Request):
+    from aigw.adapters.eventstream import encode
+
+    raw = await request.body()
+    denied = await _bedrock_auth(request, raw)
+    if denied:
+        return denied
+    body = json.loads(raw)
+    STATE["calls"] += 1
+    STATE["last_body"] = body
+    prompt = _bedrock_last_text(body)
+    text = f"Echo: {prompt}"
+    usage = {"inputTokens": 12, "outputTokens": len(text) // 4 + 1, "totalTokens": 12 + len(text) // 4 + 1}
+
+    def ev(etype: str, payload: dict) -> bytes:
+        return encode(
+            {":message-type": "event", ":event-type": etype, ":content-type": "application/json"},
+            json.dumps(payload).encode(),
+        )
+
+    async def gen():
+        yield ev("messageStart", {"role": "assistant"})
+        if "[tool]" in prompt:
+            yield ev(
+                "contentBlockStart",
+                {"contentBlockIndex": 0, "start": {"toolUse": {"toolUseId": "tooluse_1", "name": "get_weather"}}},
+            )
+            yield ev("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"toolUse": {"input": '{"city": '}}})
+            yield ev("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"toolUse": {"input": '"Lyon"}'}}})
+            yield ev("contentBlockStop", {"contentBlockIndex": 0})
+            yield ev("messageStop", {"stopReason": "tool_use"})
+        else:
+            half = len(text) // 2
+            yield ev("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": text[:half]}})
+            await asyncio.sleep(0.01)
+            yield ev("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": text[half:]}})
+            yield ev("contentBlockStop", {"contentBlockIndex": 0})
+            yield ev("messageStop", {"stopReason": "end_turn"})
+        yield ev("metadata", {"usage": usage, "metrics": {"latencyMs": 4}})
+
+    return StreamingResponse(
+        gen(), media_type="application/vnd.amazon.eventstream", headers={"x-amzn-requestid": "req-stream"}
+    )
+
+
+@mock.post("/model/{model}/invoke")
+async def bedrock_invoke(model: str, request: Request):
+    raw = await request.body()
+    denied = await _bedrock_auth(request, raw)
+    if denied:
+        return denied
+    body = json.loads(raw)
+    STATE["calls"] += 1
+    STATE["last_body"] = body
+    if model.startswith("amazon.titan-embed"):
+        dims = body.get("dimensions") or 8
+        return {
+            "embedding": [float(j % 7) / 7 for j in range(dims)],
+            "inputTextTokenCount": len(body["inputText"]) // 4 + 1,
+        }
+    if model.startswith("cohere.embed"):
+        return {"embeddings": {"float": [[0.1 * i, 0.2, 0.3] for i, _ in enumerate(body["texts"])]}}
+    return JSONResponse({"message": "unknown model"}, status_code=400)
+
+
+@mock.get("/foundation-models/{model}")
+async def bedrock_model(model: str, request: Request):
+    denied = await _bedrock_auth(request, b"")
+    return denied or {"modelDetails": {"modelId": model}}
+
+
 @mock.post("/v1/embeddings")
 async def embeddings(request: Request):
     body = await request.json()

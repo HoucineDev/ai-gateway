@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-Provider = Literal["openai_compat", "openai", "anthropic", "azure_openai", "gemini"]
+Provider = Literal["openai_compat", "openai", "anthropic", "azure_openai", "gemini", "bedrock"]
 
 
 class OrgCreate(BaseModel):

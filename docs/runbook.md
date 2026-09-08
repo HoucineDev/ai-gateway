@@ -95,6 +95,7 @@ Provider credentials are secret references on deployments (`env:NAME`), never st
 | Rotate a key with grace | `POST /admin/v1/keys/{id}/rotate {"grace_seconds": 3600}` |
 | Add an Azure OpenAI deployment | `POST /admin/v1/models/{model}/deployments {"provider": "azure_openai", "provider_model": "<azure deployment name>", "base_url": "https://<resource>.openai.azure.com", "credential_ref": "env:AZURE_OPENAI_KEY", "capabilities": {"api_version": "2024-10-21"}}`; add a price row for `(azure_openai, <deployment name>)`; Entra auth: `"capabilities": {"auth": "bearer"}` with a token in the credential ref |
 | Add a Gemini deployment (Vertex AI) | `POST /admin/v1/models/{model}/deployments {"provider": "gemini", "provider_model": "gemini-2.5-pro", "credential_ref": "env:GOOGLE_SA_JSON", "capabilities": {"project": "<gcp project>", "location": "europe-west1", "auth": "service_account"}}` (credential = service-account key JSON; or `auth: bearer` with a ready access token); Google AI Studio: `"capabilities": {"api": "google_ai"}` with the API key as credential; price row `(gemini, gemini-2.5-pro)` |
+| Add a Bedrock deployment | `POST /admin/v1/models/{model}/deployments {"provider": "bedrock", "provider_model": "anthropic.claude-3-5-sonnet-20241022-v2:0", "credential_ref": "env:AWS_BEDROCK_CREDS", "capabilities": {"region": "eu-west-1"}}` with `AWS_BEDROCK_CREDS=ACCESS_KEY_ID:SECRET[:SESSION_TOKEN]`; Bedrock API key instead: `"capabilities": {"auth": "bearer"}`; embeddings: `amazon.titan-embed-text-v2:0` or `cohere.embed-*`; price row `(bedrock, <model id>)` |
 | Take a deployment out of rotation | `POST /admin/v1/deployments/{id}/cooldown {"seconds": 600}` or PATCH `status: disabled` |
 | See upstream health | portal → Models & deployments → *Health* column (status, latency, error, failures, vLLM queue depth and KV-cache use), or `GET /admin/v1/models` → `deployments[].health` |
 | Make a vLLM deployment GPU-aware | set `capabilities: {"engine": "vllm"}` on the deployment (metrics URL derived from `base_url` minus `/v1`) or an explicit `"metrics_url"`; the worker scrapes it every health sweep |
@@ -142,6 +143,7 @@ Provider credentials are secret references on deployments (`env:NAME`), never st
 | Azure answers 401 `Access denied due to invalid subscription key` | wrong `credential_ref` value or the key belongs to another resource; with `capabilities.auth=bearer` the token must be an Entra token for `https://cognitiveservices.azure.com` |
 | 503 `gemini_project_required` | a Vertex `gemini` deployment lacks `capabilities.project` |
 | Gemini deployment unhealthy with `auth: authentication` | the service-account JWT grant was refused: check the key file (`client_email`, `private_key`), the account's Vertex AI role, and `token_url` if overridden |
+| Bedrock answers 403 *signature does not match* | the credential's secret is wrong, the clock is off by more than 15 min, or `capabilities.region` differs from the endpoint region |
 | 503 `no_eligible_deployment` with reason `saturated` | this replica has `max_concurrency` requests open on every eligible deployment; raise the cap, add deployments or gateway replicas |
 
 ## 7. Change log of operational behaviour
@@ -168,3 +170,5 @@ Provider credentials are secret references on deployments (`env:NAME`), never st
 - 2026-09-08 — `gemini` adapter (docs/spec/03 §4.2): Vertex AI and Google AI Studio, full request/response
   translation incl. tools and JSON modes, SSE streaming, embeddings, service-account token exchange; mock upstream
   serves the Gemini routes and a token endpoint.
+- 2026-09-08 — `bedrock` adapter (docs/spec/03 §4.3): Converse / ConverseStream / InvokeModel, owned SigV4 and
+  event-stream decoder, Titan + Cohere embeddings; mock upstream verifies SigV4 signatures.
