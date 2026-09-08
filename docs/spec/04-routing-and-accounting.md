@@ -115,3 +115,25 @@ refreshed each sweep while it stays down), which the router already honours (§4
 healthy probe clears it immediately. PostgreSQL remains the authority; Valkey only carries the signal to gateways,
 so with Valkey down health is still recorded and visible but does not steer routing (same fail-open stance as rate
 limits). `GET /admin/v1/models` returns each deployment's latest `health`; the portal shows it in the catalog.
+
+## 9. Exact response cache (tenant/policy scoped)
+
+Opt-in per project through `projects.settings.cache = {"enabled": true, "ttl_seconds": 300, "deterministic_only": false}`
+(`ttl_seconds` defaults to 300; `deterministic_only` restricts caching to embeddings and chat requests with
+`temperature: 0` or a `seed`). The policy travels in the config snapshot with the key scope.
+
+Key: `rc:{project_id}:sha256(org_id, project_id, model, provider, provider_model, canonical body)` where the canonical body
+is the validated request without `stream`, `stream_options`, `user` and `metadata` (docs/spec/02 §"Caching"). The
+deployment part comes from the first candidate of the routing decision, so answers never cross providers or tenants.
+
+Flow: authenticate → validate → rate limit → route → **cache lookup** → reserve → upstream → settle → **cache store**.
+A hit records a `request_attempts` row with `status = cached`, `reserved_amount = 0` and a `usage_events` row with
+`cost = 0`, `usage_source = cache` and the original token counts, so spend reports stay exact and the request is
+visible in diagnostics (`routing.cache = "hit"`). Budgets and rate limits are never bypassed by a miss, and a hit
+never touches a budget. Unary chat, embeddings and text-only streamed answers (no tool calls) populate the cache;
+streaming clients get a hit replayed as role → content → finish (→ usage when requested) → `[DONE]`. Entries above
+`AIGW_CACHE_MAX_ENTRY_BYTES` are not stored. Valkey is the store; when it is unreachable every lookup misses.
+
+Client control: request header `X-AIGW-Cache: no-store` (neither read nor write) or `no-cache` (skip the read,
+refresh the entry). Every response carries `X-AIGW-Cache: hit | miss | refresh | bypass | off` and a hit's body has
+`aigw.cached = true`. Metric `aigw_cache_total{result}`.

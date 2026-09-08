@@ -17,6 +17,7 @@ from aigw.adapters.base import DeploymentConfig
 from aigw.core.pricing import PriceCard
 from aigw.db.models import ConfigVersion, Deployment, Model, Price, Project, VirtualKey
 from aigw.db.session import Database
+from aigw.gateway.cache import CachePolicy
 
 log = logging.getLogger(__name__)
 
@@ -36,6 +37,10 @@ class KeyScope:
     allowed_tags: list[str] | None  # from project settings
     project_rpm_limit: int | None = None
     project_tpm_limit: int | None = None
+    cache_ttl_seconds: int = 0  # projects.settings.cache (docs/spec/04 §9); 0 = cache off
+    cache_deterministic_only: bool = False
+    cache_ttl_seconds: int = 0  # projects.settings.cache (docs/spec/04 §9); 0 = cache off
+    cache_deterministic_only: bool = False
 
 
 @dataclass
@@ -154,6 +159,8 @@ class SnapshotStore:
                 rpm_limit=k.rpm_limit,
                 tpm_limit=k.tpm_limit,
                 allowed_tags=settings.get("allowed_tags"),
+                cache_ttl_seconds=(cache.ttl_seconds if (cache := CachePolicy.from_project_settings(settings)) else 0),
+                cache_deterministic_only=bool(cache and cache.deterministic_only),
                 project_rpm_limit=settings.get("rpm_limit"),
                 project_tpm_limit=settings.get("tpm_limit"),
             )

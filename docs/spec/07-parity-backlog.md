@@ -41,7 +41,7 @@ Feature families from the proposal's reference inventory, with the phase in whic
 | Active health checks | P2 ✓ | worker probe → `deployment_health` + Valkey cooldown (docs/spec/04 §6, `tests/test_health.py`) |
 | Latency-EWMA and vLLM queue-pressure routing (GPU-aware) | P2 ✓ | docs/spec/04 §5.1; worker scrapes vLLM `/metrics` → Valkey; in-flight admission control local per replica (`tests/test_routing_adaptive.py`) |
 | Budget-, tag-, priority-based routing | P3 | |
-| Exact response cache (tenant/policy scoped) | P2 | |
+| Exact response cache (tenant/policy scoped) | P2 ✓ | per-project policy, Valkey, zero-cost `cached` attempts (docs/spec/04 §9, `tests/test_cache.py`) |
 | Semantic cache (opt-in, single-turn) | P4 | |
 | Routing explanations and policy simulation (differentiator) | P3 (explanations ✓) | diagnostics record stores candidates, rejections and per-candidate signals/scores; simulation P3 |
 | Multi-region config distribution | P4 | |

@@ -74,6 +74,10 @@ time-to-first-byte EWMA, by the vLLM queue depth the worker scrapes from `/metri
 and by the requests this replica already has in flight; `capabilities.max_concurrency` is a hard local admission
 limit. Every decision is explained in the request diagnostics (per-candidate signals and scores).
 
+Exact response cache (docs/spec/04 §9): enable per project with `settings.cache = {"enabled": true, "ttl_seconds": 300}`.
+Identical requests inside that project (same model, provider and body) are answered from Valkey with a zero-cost
+`cached` attempt that still shows in Requests and usage; `X-AIGW-Cache: no-cache` refreshes, `no-store` bypasses.
+
 Point a real deployment at your vLLM/KServe endpoint through the control API:
 
 ```bash

@@ -324,6 +324,72 @@ class Ledger:
                 count += 1
         return count
 
+    async def record_cache_hit(
+        self,
+        *,
+        request_id: uuid.UUID,
+        scope,
+        model_id: str,
+        model_name: str,
+        deployment,
+        endpoint: str,
+        usage,
+        stream: bool,
+        tags: dict | None,
+        routing: dict,
+        latency_ms: int,
+    ) -> None:
+        """A served cache entry (docs/spec/04 §9): one `cached` attempt and usage event, no reservation, cost 0."""
+        now = _now()
+        async with self.db.tx() as s:
+            attempt = RequestAttempt(
+                request_id=request_id,
+                attempt_no=1,
+                org_id=uuid.UUID(scope.org_id),
+                team_id=uuid.UUID(scope.team_id),
+                project_id=uuid.UUID(scope.project_id),
+                key_id=uuid.UUID(scope.key_id),
+                model_id=uuid.UUID(model_id),
+                model_name=model_name,
+                deployment_id=uuid.UUID(deployment.id),
+                provider=deployment.provider,
+                provider_model=deployment.provider_model,
+                endpoint=endpoint,
+                status="cached",
+                reserved_amount=Decimal(0),
+                settled_amount=Decimal(0),
+                prompt_tokens=usage.prompt_tokens,
+                completion_tokens=usage.completion_tokens,
+                usage_source="cache",
+                routing=routing,
+                dedup_key=f"{request_id}:1",
+                ended_at=now,
+            )
+            s.add(attempt)
+            await s.flush()
+            s.add(
+                UsageEvent(
+                    request_id=request_id,
+                    attempt_id=attempt.id,
+                    org_id=attempt.org_id,
+                    team_id=attempt.team_id,
+                    project_id=attempt.project_id,
+                    key_id=attempt.key_id,
+                    model_name=model_name,
+                    deployment_id=attempt.deployment_id,
+                    provider=deployment.provider,
+                    endpoint=endpoint,
+                    prompt_tokens=usage.prompt_tokens,
+                    completion_tokens=usage.completion_tokens,
+                    cost=Decimal(0),
+                    usage_source="cache",
+                    status="cached",
+                    latency_ms=latency_ms,
+                    stream=stream,
+                    tags=tags or {},
+                )
+            )
+
     async def mark_first_byte(self, attempt_id: uuid.UUID, at: datetime) -> None:
         async with self.db.tx() as s:
             await s.execute(update(RequestAttempt).where(RequestAttempt.id == attempt_id).values(first_byte_at=at))

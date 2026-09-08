@@ -10,6 +10,7 @@ from aigw.core.errors import ErrorType, GatewayError
 from aigw.core.types import ChatRequest, EmbeddingRequest
 from aigw.gateway import metrics
 from aigw.gateway.auth import authenticate
+from aigw.gateway.cache import HEADER as CACHE_HEADER
 
 router = APIRouter(prefix="/v1")
 
@@ -44,11 +45,22 @@ async def chat_completions(request: Request, authorization: str | None = Header(
     scope = authenticate(authorization, st.snapshots)
     req = await _parse(request, ChatRequest)
     try:
-        ctx = await st.pipeline.prepare(scope, req, "chat")
+        ctx = await st.pipeline.prepare(scope, req, "chat", cache_directive=request.headers.get(CACHE_HEADER))
+        hit = await st.pipeline.cached(ctx)
     except GatewayError as exc:
         _count_rejection(exc)
         raise
-    headers = {"x-aigw-request-id": str(ctx.request_id)}
+    headers = {"x-aigw-request-id": str(ctx.request_id), CACHE_HEADER: ctx.cache_status}
+    if hit:
+        headers["x-aigw-deployment"] = hit["aigw"]["deployment"]
+        headers["x-aigw-provider"] = hit["aigw"]["provider"]
+        if req.stream:
+            return StreamingResponse(
+                st.pipeline.replay_stream(ctx, hit),
+                media_type="text/event-stream",
+                headers={**headers, "cache-control": "no-cache", "x-accel-buffering": "no"},
+            )
+        return JSONResponse(hit, headers=headers)
     if req.stream:
         return StreamingResponse(
             st.pipeline.run_stream(ctx),
@@ -71,8 +83,8 @@ async def embeddings(request: Request, authorization: str | None = Header(defaul
     scope = authenticate(authorization, st.snapshots)
     req = await _parse(request, EmbeddingRequest)
     try:
-        ctx = await st.pipeline.prepare(scope, req, "embeddings")
-        out = await st.pipeline.run_unary(ctx)
+        ctx = await st.pipeline.prepare(scope, req, "embeddings", cache_directive=request.headers.get(CACHE_HEADER))
+        out = await st.pipeline.cached(ctx) or await st.pipeline.run_unary(ctx)
     except GatewayError as exc:
         _count_rejection(exc)
         raise
@@ -82,6 +94,7 @@ async def embeddings(request: Request, authorization: str | None = Header(defaul
             "x-aigw-request-id": str(ctx.request_id),
             "x-aigw-deployment": out["aigw"]["deployment"],
             "x-aigw-provider": out["aigw"]["provider"],
+            CACHE_HEADER: ctx.cache_status,
         },
     )
 

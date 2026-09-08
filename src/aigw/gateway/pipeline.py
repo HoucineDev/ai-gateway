@@ -12,6 +12,7 @@ import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 from aigw.adapters.base import DeploymentConfig
@@ -29,11 +30,13 @@ from aigw.core.types import (
     EndEvent,
     FinishEvent,
     StartEvent,
+    ToolCallDelta,
     Usage,
     UsageEvent,
 )
 from aigw.gateway import metrics
 from aigw.gateway.accounting import Ledger, Reservation
+from aigw.gateway.cache import ResponseCache, cache_key, is_deterministic, parse_directive
 from aigw.gateway.ratelimit import CooldownStore, LimitScope, RateLimiter
 from aigw.gateway.router import Candidate, Router, RoutingDecision, RoutingPolicy
 from aigw.gateway.signals import RoutingSignals
@@ -56,6 +59,10 @@ class RequestContext:
     attempt_no: int = 0
     decision: RoutingDecision | None = None
     limit_scopes: list[LimitScope] = field(default_factory=list)
+    cache_key: str | None = None  # docs/spec/04 §9
+    cache_status: str = "off"  # off | bypass | miss | refresh | hit
+    cache_key: str | None = None  # docs/spec/04 §9
+    cache_status: str = "off"  # off | bypass | miss | refresh | hit
 
 
 class Pipeline:
@@ -71,6 +78,7 @@ class Pipeline:
         secrets: SecretResolver,
         router: Router | None = None,
         signals: RoutingSignals | None = None,
+        cache: ResponseCache | None = None,
     ):
         self.settings = settings
         self.snapshots = snapshots
@@ -80,6 +88,8 @@ class Pipeline:
         self.cooldowns = cooldowns
         self.secrets = secrets
         self.signals = signals or RoutingSignals.build(None, settings.routing_ewma_alpha)
+        self.cache = cache or ResponseCache(None, settings.cache_max_entry_bytes)
+        self.cache = cache or ResponseCache(None, settings.cache_max_entry_bytes)
         self.router = router or Router(
             adapters, cooldowns, signals=self.signals, policy=RoutingPolicy.from_settings(settings)
         )
@@ -91,7 +101,13 @@ class Pipeline:
         task.add_done_callback(self._background.discard)
 
     # ---- preparation -------------------------------------------------------
-    async def prepare(self, scope: KeyScope, req: ChatRequest | EmbeddingRequest, endpoint: str) -> RequestContext:
+    async def prepare(
+        self,
+        scope: KeyScope,
+        req: ChatRequest | EmbeddingRequest,
+        endpoint: str,
+        cache_directive: str | None = None,
+    ) -> RequestContext:
         snap = self.snapshots.current
         if snap is None:
             raise GatewayError(ErrorType.unavailable, "Gateway has no configuration loaded", code="config_unavailable")
@@ -132,6 +148,7 @@ class Pipeline:
         ]
         await self.limiter.check(ctx.limit_scopes, est_prompt + est_out)
         ctx.decision = await self.router.route(model, req, endpoint, est_prompt)
+        self._plan_cache(ctx, cache_directive)
         return ctx
 
     def _validate_tags(self, scope: KeyScope, metadata: dict[str, str] | None) -> dict[str, str]:
@@ -239,6 +256,124 @@ class Pipeline:
     def _credential(self, d: DeploymentConfig) -> str:
         return self.secrets.resolve(d.credential_ref)
 
+    # ---- exact response cache (docs/spec/04 §9) ---------------------------
+    def _plan_cache(self, ctx: RequestContext, directive: str | None) -> None:
+        scope = ctx.scope
+        if scope.cache_ttl_seconds <= 0 or (scope.cache_deterministic_only and not is_deterministic(ctx.req)):
+            ctx.cache_status = "off"
+            return
+        directive = parse_directive(directive)
+        if directive == "no-store":
+            ctx.cache_status = "bypass"
+            return
+        first = ctx.decision.ordered[0].deployment
+        ctx.cache_key = cache_key(scope, ctx.model.name, first, ctx.req)
+        ctx.cache_status = "refresh" if directive == "no-cache" else "miss"
+
+    async def cached(self, ctx: RequestContext) -> dict[str, Any] | None:
+        """Serve a hit: records a zero-cost `cached` attempt and returns the wire response, else None."""
+        if ctx.cache_status != "miss" or not ctx.cache_key:
+            metrics.CACHE.labels(result=ctx.cache_status).inc()
+            return None
+        entry = await self.cache.get(ctx.cache_key)
+        if not entry:
+            metrics.CACHE.labels(result="miss").inc()
+            return None
+        ctx.cache_status = "hit"
+        metrics.CACHE.labels(result="hit").inc()
+        cand = ctx.decision.ordered[0]
+        usage = Usage(**entry.get("usage", {}))
+        latency_ms = int((time.time() - ctx.started) * 1000)
+        await self.ledger.record_cache_hit(
+            request_id=ctx.request_id,
+            scope=ctx.scope,
+            model_id=ctx.model.id,
+            model_name=ctx.model.name,
+            deployment=cand.deployment,
+            endpoint=ctx.endpoint,
+            usage=usage,
+            stream=bool(getattr(ctx.req, "stream", False)),
+            tags=ctx.tags,
+            routing={**ctx.decision.explain(), "chosen": cand.deployment.name, "attempt": 1, "cache": "hit"},
+            latency_ms=latency_ms,
+        )
+        metrics.observe(ctx, cand.deployment, "cached", usage, Decimal(0), latency_ms, None)
+        wire = dict(entry["response"])
+        wire["id"] = f"chatcmpl-{ctx.request_id}" if ctx.endpoint == "chat" else wire.get("id")
+        wire["aigw"] = {
+            "request_id": str(ctx.request_id),
+            "deployment": cand.deployment.name,
+            "provider": cand.deployment.provider,
+            "cached": True,
+        }
+        return wire
+
+    async def _cache_store(
+        self, ctx: RequestContext, cand: Candidate, wire: dict[str, Any], usage: Usage | None
+    ) -> None:
+        if ctx.cache_status not in ("miss", "refresh") or not ctx.cache_key or usage is None:
+            return
+        entry = {
+            "response": {k: v for k, v in wire.items() if k != "aigw"},
+            "usage": usage.model_dump(),
+            "deployment": cand.deployment.name,
+            "provider": cand.deployment.provider,
+        }
+        await self.cache.put(ctx.cache_key, entry, ctx.scope.cache_ttl_seconds)
+
+    async def replay_stream(self, ctx: RequestContext, wire: dict[str, Any]) -> AsyncIterator[bytes]:
+        """Serve a cached chat completion to a streaming client as role → content → finish (→ usage) → [DONE]."""
+        req: ChatRequest = ctx.req  # type: ignore[assignment]
+        cid, created, model = wire["id"], int(time.time()), ctx.model.name
+        for choice in wire.get("choices", []):
+            idx = choice.get("index", 0)
+            msg = choice.get("message", {})
+            yield _sse(_delta_chunk(cid, created, model, DeltaEvent(index=idx, role="assistant")))
+            if msg.get("content"):
+                yield _sse(_delta_chunk(cid, created, model, DeltaEvent(index=idx, content=msg["content"])))
+            if msg.get("tool_calls"):
+                calls = [
+                    ToolCallDelta(index=i, **{k: v for k, v in tc.items() if k in ("id", "type", "function")})
+                    for i, tc in enumerate(msg["tool_calls"])
+                ]
+                yield _sse(_delta_chunk(cid, created, model, DeltaEvent(index=idx, tool_calls=calls)))
+            yield _sse(
+                _finish_chunk(
+                    cid, created, model, FinishEvent(index=idx, finish_reason=choice.get("finish_reason") or "stop")
+                )
+            )
+        if req.stream_options and req.stream_options.include_usage and wire.get("usage"):
+            yield _sse(
+                {
+                    "id": cid,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": model,
+                    "choices": [],
+                    "usage": wire["usage"],
+                }
+            )
+        yield b"data: [DONE]\n\n"
+
+    @staticmethod
+    def _stream_wire(
+        ctx: RequestContext, text: str, finish_reason: str | None, usage: Usage, estimated: bool
+    ) -> dict[str, Any]:
+        return {
+            "id": f"chatcmpl-{ctx.request_id}",
+            "object": "chat.completion",
+            "created": int(ctx.started),
+            "model": ctx.model.name,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": text},
+                    "finish_reason": finish_reason or "stop",
+                }
+            ],
+            "usage": usage.to_wire(estimated=estimated),
+        }
+
     # ---- unary chat / embeddings ---------------------------------------------
     async def run_unary(self, ctx: RequestContext) -> dict[str, Any]:
         last_err: UpstreamError | None = None
@@ -305,6 +440,7 @@ class Pipeline:
                     "deployment": cand.deployment.name,
                     "provider": cand.deployment.provider,
                 }
+                await self._cache_store(ctx, cand, wire, usage)
                 return wire
         if last_err:
             raise last_err.to_gateway_error()
@@ -343,6 +479,9 @@ class Pipeline:
             upstream_rid: str | None = None
             finished = False
             text_len = 0
+            parts: list[str] = []  # assembled for the response cache (text-only answers)
+            saw_tools = False
+            finish_reason = None
             status = "succeeded"
             err_obj: UpstreamError | None = None
             try:
@@ -358,9 +497,13 @@ class Pipeline:
                     if isinstance(ev, DeltaEvent):
                         if ev.content:
                             text_len += len(ev.content)
+                            parts.append(ev.content)
+                        if ev.tool_calls:
+                            saw_tools = True
                         payload = _delta_chunk(chunk_id, created, ctx.model.name, ev)
                     elif isinstance(ev, FinishEvent):
                         finished = True
+                        finish_reason = ev.finish_reason
                         payload = _finish_chunk(chunk_id, created, ctx.model.name, ev)
                     else:
                         continue
@@ -445,6 +588,13 @@ class Pipeline:
                 err=err_obj,
                 first_byte_at=first_byte_at,
             )
+            if status == "succeeded" and err_obj is None and finished and not saw_tools and usage is not None:
+                await self._cache_store(
+                    ctx,
+                    cand,
+                    self._stream_wire(ctx, "".join(parts), finish_reason, usage, source == "estimated"),
+                    usage,
+                )
             if err_obj is not None:
                 if not sent_any:
                     raise err_obj.to_gateway_error()

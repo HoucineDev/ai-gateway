@@ -62,6 +62,10 @@ class Settings(BaseSettings):
     routing_queue_ref: float = 8.0
     routing_inflight_ref: float = 4.0
 
+    cache_max_entry_bytes: int = 262_144  # exact response cache (docs/spec/04 §9): larger answers are not stored
+
+    cache_max_entry_bytes: int = 262_144  # exact response cache (docs/spec/04 §9): larger answers are not stored
+
     config_refresh_seconds: float = 5.0
     config_max_staleness_seconds: float = 300.0
     ratelimit_fail_mode: Literal["open", "closed"] = "open"

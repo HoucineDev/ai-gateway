@@ -104,4 +104,4 @@ config_versions(id BIGSERIAL, reason TEXT, created_at)  -- max(id) is the curren
 
 - Every repository method takes an explicit `org_id` (or key scope) and adds it to the WHERE clause; cross-org lookups are only allowed for global models/prices.
 - Phase 2: `ALTER TABLE … ENABLE ROW LEVEL SECURITY` on tenant tables with `current_setting('aigw.org_id')`; the gateway DB role must not be table owner.
-- Cache keys (Phase 2 exact cache) include `org_id`, `project_id`, model, deployment provider model, and a hash of the full request body.
+- Cache keys (exact cache, docs/spec/04 §9) include `org_id`, `project_id`, model, deployment provider and provider model, and a hash of the canonical request body (without `stream`, `stream_options`, `user`, `metadata`).

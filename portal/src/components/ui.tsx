@@ -29,6 +29,7 @@ const statusTone: Record<string, string> = {
   active: "border-accent/40 text-accent bg-accent/10",
   succeeded: "border-accent/40 text-accent bg-accent/10",
   pending: "border-info/40 text-info bg-info/10",
+  cached: "border-info/40 text-info bg-info/10",
   revoked: "border-destructive/40 text-destructive bg-destructive/10",
   failed: "border-destructive/40 text-destructive bg-destructive/10",
   ambiguous: "border-warning/40 text-warning bg-warning/10",

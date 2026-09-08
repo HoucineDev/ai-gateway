@@ -37,6 +37,11 @@ Fields: `model`, `input` (string | string[] | int[] | int[][]), `encoding_format
 
 Returns the logical models the calling key may use (intersection of project scope and key `allowed_models`), OpenAI `list` shape with extra `aigw` object: `{modalities, context_window, supports_tools, supports_json_schema, deployments: n}`.
 
+### 2.3b Cache control
+
+Request header `X-AIGW-Cache: no-store | no-cache`; response header `X-AIGW-Cache: hit | miss | refresh | bypass | off`;
+a served hit carries `aigw.cached: true` (docs/spec/04 §9). Only projects with `settings.cache.enabled` are affected.
+
 ### 2.4 Error envelope
 
 ```json
